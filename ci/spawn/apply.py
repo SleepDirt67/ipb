@@ -79,8 +79,8 @@ static int next_switch_key(CScriptIniFile* ini, LPCSTR section, LPCSTR prefix, i
     return index;
 }''')
 edit('src/xrScripts/exports/script_ini_file_script.cpp',
-     '\t\t\t.def("line_count",\t&CScriptIniFile::line_count)',
-     '''\t\t\t.def("line_count",\t&CScriptIniFile::line_count)
+     '\t\t\t.def("line_count",\t\t&CScriptIniFile::line_count)',
+     '''\t\t\t.def("line_count",\t\t&CScriptIniFile::line_count)
             .def("ixray_next_switch_key", &next_switch_key, out_value<6>())''')
 
 

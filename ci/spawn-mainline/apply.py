@@ -119,4 +119,5 @@ if len(sys.argv) > 2:
     output = Path(sys.argv[2])
     output.mkdir(parents=True, exist_ok=True)
     (output / "stock.lua").write_bytes(stock)
+    (output / "previous.lua").write_bytes(stock[:first] + previous + b"\n" + stock[last:])
     (output / "candidate.lua").write_bytes(stock[:first] + new + b"\n" + stock[last:])

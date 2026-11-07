@@ -485,7 +485,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_voice_catalog.exe | Tee-Object checks/SPAWN_VOICE_CATALOG_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore voice catalogue differential failed' }
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
           if ($LASTEXITCODE -ne 0) { throw 'Native voice binder replay failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }

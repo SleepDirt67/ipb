@@ -143,7 +143,7 @@ static Result Replay(const char* voice, const char* input, const char* mode)
 
 int main(int argc, char** argv)
 {
-    Require(argc == 4, "stock, candidate and replay input");
+    Require(argc == 5, "stock, previous, candidate and replay input");
     const auto root = std::filesystem::absolute("spawn-voice-replay");
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "characters_voice/model");
@@ -170,9 +170,11 @@ int main(int argc, char** argv)
 
     for (const auto* mode : {"normal", "npc_override", "fs_override", "getfs_override", "debug_hook"})
     {
-        const auto base = Replay(argv[1], argv[3], mode);
-        const auto work = Replay(argv[2], argv[3], mode);
+        const auto base = Replay(argv[1], argv[4], mode);
+        const auto work = Replay(argv[3], argv[4], mode);
+        const auto previous = Replay(argv[2], argv[4], mode);
         Require(work.state == base.state && work.added == base.added, mode);
+        Require(work.state == previous.state && work.added == previous.added, "PR24 result");
         if (std::string_view(mode) == "normal")
             Require(work.applied == work.added && work.fs == 0 && base.fs > 0, "native path activation");
         else
@@ -180,24 +182,37 @@ int main(int argc, char** argv)
         std::printf("PASS %s: %u registrations, Lua VFS calls %u -> %u, native %u\n",
             mode, work.added, base.fs, work.fs, work.applied);
     }
+    std::vector<double> stock, previous, candidate;
+    for (int trial = 0; trial < 9; ++trial)
+    {
+        if (trial % 2)
+        {
+            candidate.push_back(Replay(argv[3], argv[4], "normal").ms);
+            previous.push_back(Replay(argv[2], argv[4], "normal").ms);
+            stock.push_back(Replay(argv[1], argv[4], "normal").ms);
+        }
+        else
+        {
+            stock.push_back(Replay(argv[1], argv[4], "normal").ms);
+            previous.push_back(Replay(argv[2], argv[4], "normal").ms);
+            candidate.push_back(Replay(argv[3], argv[4], "normal").ms);
+        }
+    }
+    std::sort(stock.begin(), stock.end());
+    std::sort(previous.begin(), previous.end());
+    std::sort(candidate.begin(), candidate.end());
+    std::printf("Fixture median stock / PR24 Lua with shared catalogue / candidate: %.3f / %.3f / %.3f ms\n",
+        stock[4], previous[4], candidate[4]);
+
     string_path name;
     FS.update_path(name, "$game_sounds$", "characters_voice\\model\\line1.ogg");
     FS.file_delete(name);
     Require(FS.prepared_spawn_voice_count("characters_voice\\model\\line") == -2, "delete invalidation");
-    const auto stale = Replay(argv[2], argv[3], "normal");
+    const auto stale = Replay(argv[3], argv[4], "normal");
     Require(stale.applied == 0, "invalid index uses original binder");
     FS.prepare_spawn_voice_catalogue();
     Require(FS.prepared_spawn_voice_count("characters_voice\\model\\line") == 0, "index rebuilt without file");
 
-    std::vector<double> before, after;
-    for (int trial = 0; trial < 9; ++trial)
-    {
-        before.push_back(Replay(argv[1], argv[3], "normal").ms);
-        after.push_back(Replay(argv[2], argv[3], "normal").ms);
-    }
-    std::sort(before.begin(), before.end());
-    std::sort(after.begin(), after.end());
-    std::printf("Fixture median stock/candidate: %.3f / %.3f ms\n", before[4], after[4]);
     Core._destroy();
     std::filesystem::remove_all(root);
 }

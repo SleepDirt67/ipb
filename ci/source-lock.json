@@ -1,6 +1,6 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
-  ".github/workflows/windows-release.yml": "38aba60d1201f6d187e15d131b9355086d23bbd38fccf3cefa1a87b763fea829",
+  ".github/workflows/windows-release.yml": "59784f3bb158e00ee77c3c94f8e46bfeacaf969a35fb44c6e9cb2d0153fe6e3f",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -25,8 +25,8 @@
   "ci/spawn-mainline/SpawnVoiceBindings.h": "c86d92a2cf499991878f73f9c0c2bbfe69036f4ce477ee35af2dbf62ea72fcc2",
   "ci/spawn-mainline/SpawnVoiceCatalogue.h": "c51bd187b5d2910362513a8708344adee442165325174a22d1f0f6c0b88928e3",
   "ci/spawn-mainline/SpawnVoiceVfs.inc": "34bb3bcafdda9297edb492d34d46e94057a1f96a99b07f5cbeebba00cb32ebc8",
-  "ci/spawn-mainline/apply.py": "0dee38b7f63c94aef5b662ca2d0a08ed5558595cf2a8d52419b22af162ffb3cc",
-  "ci/spawn-mainline/voice_replay.cpp": "06a60cabaa74b03ad16b330e9ee36b6218f73d066e2eb72bfef5abed66c24296",
+  "ci/spawn-mainline/apply.py": "137916e3e868868f4bbe6c8c6cdbe2c0b61858dc3da41127dc69733dd143ddad",
+  "ci/spawn-mainline/voice_replay.cpp": "3a64317e98d010d15e20e0a04f9f5adacf2efc10cc026e00ea5dfe22e8bac4d3",
   "ci/spawn-mainline/voice_replay.lua": "85bb05bf94e4e9eda334fef8c87e1903df3bed365a33d4c5a3bc779f290ab48f",
   "ci/spawn-path/CMakeLists.txt": "36781aa96711531d8b8daf16825878b9e467a3bfc0c0a2072d2952387e4ba6c4",
   "ci/spawn-path/SpawnLuaProfile.h": "15f70e309f45312b5e9d2c34867b32facf40b50505068658f0f38ab4526c0be0",

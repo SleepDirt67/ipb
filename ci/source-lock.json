@@ -35,7 +35,7 @@
   "ci/spawn-path/package_capture.py": "2ae0b45ce60ae462d6d09d98f2574630fcef2acee07fe91f5cc64582f406c5d6",
   "ci/spawn-preparation/SoundWaveReadWitness.h": "ed4e399ee363d3b398c3da4fe1c42cfbb53b060a9a06fbc2b0acf44903aacca1",
   "ci/spawn-preparation/apply.py": "6bad9f1482d72f090c67643b69add835e35fe2480ac98af792f01a3c96e41c85",
-  "ci/spawn-preparation/shader_fixture.cpp": "cc89264ccd7475f7ca4d90ab1a1fcc92fd5418716b6d221d24f8d455f55575e1",
+  "ci/spawn-preparation/shader_fixture.cpp": "3eeb71f7aba571759a076c00370819f09c56d6f40f3d9fdf03f45ea865a13a27",
   "ci/spawn-preparation/shaders.py": "f62518dee9ad1b0a87e8bcb311ec32d5820d31e9f8d2de34575239826909e676",
   "ci/spawn-preparation/voice.py": "b8bbfe4700d468a3fef99f662f4cd00f34c847743e21fa3289f2ac88bd66595e",
   "ci/spawn-preparation/voice_catalog_fixture.cpp": "da9e15f5f00557c3f6fa28d7fdb7132bf3b9a34e9b8a4e296c1f1e3f45e2604d",

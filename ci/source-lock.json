@@ -96,5 +96,9 @@
   "tools/apply_ixray_spawn_scheduler_detail.py": "3d59ed80b34433308d5147bac3947943ce73402f7f5600af51b7d29475499ca5",
   "tools/apply_ixray_stall_work.py": "3075bb9e5bac0ad76e9ff488aed24eccaec80b6ae61e2046d911b89341c1a951",
   "tools/pdb_identity.py": "3082edd8565a4b2e59d3e6eb5f15c7b4293fbb13a0281dec56d81d526624d43e",
-  "tools/verify_ixray_pe.py": "79de0894208193c96efadddfe5dcb659abb2200f463bf24a58a72412a134728e"
+  "tools/verify_ixray_pe.py": "79de0894208193c96efadddfe5dcb659abb2200f463bf24a58a72412a134728e",
+  "verification/pacing/CMakeLists.txt": "866783c35d39aafd9f5c9cc156285f9ec1e09047dc4b599c2ea28ad9dd1483ae",
+  "verification/pacing/present_smoke.cpp": "340bd414c51f4930d9c33d6213074788305cf6123e38b0eaeb49a346574af313",
+  "verification/pacing/run_present_smoke.ps1": "0183c43f7dde8182a4b7a2cc3f653d4ab5f3dff4d12937368016b001a934477e",
+  "verification/pacing/verify_present_smoke.py": "eb92c68d34328625d2ae572b24cb4a77f9fbe3ecd8d1f86644df4a769ae790b4"
 }

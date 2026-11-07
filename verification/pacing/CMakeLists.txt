@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(ixray_pacing_present_smoke LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_executable(ixray_pacing_present_smoke present_smoke.cpp ../../experiments/periodic-136/PacingDiagnostics.cpp)
+target_include_directories(ixray_pacing_present_smoke PRIVATE ../../experiments/periodic-136 ../../experiments/periodic-136/standalone)
+target_compile_definitions(ixray_pacing_present_smoke PRIVATE IXRAY_PACING_STANDALONE NOMINMAX)
+target_link_libraries(ixray_pacing_present_smoke PRIVATE d3d11 dxgi user32 advapi32)

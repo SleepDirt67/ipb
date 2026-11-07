@@ -362,6 +362,18 @@ jobs:
           python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
           if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
 
+      - name: Compare stock and prepared NPC planner batches using Windows Luabind
+        shell: pwsh
+        run: |
+          $build = 'ixray/build/x64/Engine-Windows'
+          $lua = Get-ChildItem "$build/packages" -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          cmake --build $build --config Release --target ixray_spawn_goap_fixture --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'GOAP batch fixture compilation failed' }
+          Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') "$build/bin/Release/"
+          & "$build/bin/Release/ixray_spawn_goap_fixture.exe" ci/spawn/goap_fixture.lua checks/prepared-spawn/stock_goap.lua checks/prepared-spawn/prepared_goap.lua | Tee-Object checks/SPAWN_GOAP_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'GOAP batch differential failed' }
+
       - name: Compare prepared audio metadata using the exact Windows Vorbis DLL
         shell: pwsh
         run: |
@@ -427,7 +439,7 @@ jobs:
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_goap_fixture --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
       - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
@@ -444,8 +456,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore fixture failed' }
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_plan_fixture.exe | Tee-Object checks/SPAWN_PLAN_NATIVE.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_goap_fixture.exe ci/spawn/goap_fixture.lua checks/prepared-spawn/stock_goap.lua checks/prepared-spawn/prepared_goap.lua | Tee-Object checks/SPAWN_GOAP_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'GOAP batch differential failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
           python ci/package.py

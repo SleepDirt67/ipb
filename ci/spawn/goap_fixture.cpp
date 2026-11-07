@@ -27,12 +27,12 @@ struct Action
     void add_condition(const Property& property) { rules.push_back({property.condition(), property.hash_value(), property.value(), false}); }
     void add_effect(const Property& property) { rules.push_back({property.condition(), property.hash_value(), property.value(), true}); }
 
-    std::string serialize() const
+    luabind::internal_string serialize() const
     {
         std::string result;
         for (const auto& rule : rules)
             result += std::to_string(rule.id) + "/" + std::to_string(rule.hash) + (rule.value ? "t" : "f") + (rule.effect ? "e;" : "p;");
-        return result;
+        return {result.data(), result.size()};
     }
 };
 

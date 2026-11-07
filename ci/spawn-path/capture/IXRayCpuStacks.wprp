@@ -1,0 +1,94 @@
+<?xml version='1.0' encoding='utf-8'?>
+<WindowsPerformanceRecorder Version="1.0" Author="IX-Ray">
+  <Profiles>
+    <SystemCollector Id="StackCollector" Name="IXRayCpuStacks">
+      <BufferSize Value="512" />
+      <Buffers Value="512" />
+    </SystemCollector>
+    <EventCollector Id="DisplayCollector" Name="IXRayDisplayPath">
+      <BufferSize Value="512" />
+      <Buffers Value="256" />
+    </EventCollector>
+    <SystemProvider Id="StackProvider">
+      <Keywords>
+        <Keyword Value="ProcessThread" />
+        <Keyword Value="Loader" />
+        <Keyword Value="SampledProfile" />
+      </Keywords>
+      <Stacks>
+        <Stack Value="SampledProfile" />
+      </Stacks>
+    </SystemProvider>
+    <EventProvider Id="Gpu" Name="802ec45a-1e99-4b83-9920-87c98277ba9d" Level="5">
+      <Keywords>
+        <Keyword Value="0x4000000008000001" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="0x11" />
+        <EventId Value="0x74" />
+        <EventId Value="0xa8" />
+        <EventId Value="0xab" />
+        <EventId Value="0xac" />
+        <EventId Value="0xb2" />
+        <EventId Value="0xb4" />
+        <EventId Value="0xb8" />
+        <EventId Value="0xd7" />
+        <EventId Value="0xf4" />
+        <EventId Value="0xf5" />
+        <EventId Value="0xfc" />
+        <EventId Value="0x103" />
+        <EventId Value="0x10a" />
+        <EventId Value="0x111" />
+        <EventId Value="0x17e" />
+        <EventId Value="0x182" />
+      </EventFilters>
+    </EventProvider>
+    <EventProvider Id="Dxgi" Name="ca11c036-0102-4a2d-a6ad-f03cfed5d3c9" Level="5">
+      <Keywords>
+        <Keyword Value="0x8000000000000003" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="0xa" />
+        <EventId Value="0x2a" />
+        <EventId Value="0x2b" />
+        <EventId Value="0x2d" />
+        <EventId Value="0x37" />
+        <EventId Value="0x38" />
+      </EventFilters>
+    </EventProvider>
+    <EventProvider Id="Dwm" Name="9e9bba3c-2e38-40cb-99f4-9e8281425164" Level="5">
+      <Keywords>
+        <Keyword Value="0x8000000000000081" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="0xf" />
+        <EventId Value="0x40" />
+        <EventId Value="0xc4" />
+      </EventFilters>
+    </EventProvider>
+    <EventProvider Id="Win32k" Name="8c416c79-d49b-4f01-a467-e56d3aa8234c" Level="5">
+      <Keywords>
+        <Keyword Value="0x8000000400001000" />
+      </Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="0xc9" />
+        <EventId Value="0x12d" />
+      </EventFilters>
+    </EventProvider>
+    <Profile Id="IXRayCpuStacks.Verbose.Memory" Name="IXRayCpuStacks" Description="CPU samples and filtered graphics-path events" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="StackCollector">
+          <SystemProviderId Value="StackProvider" />
+        </SystemCollectorId>
+        <EventCollectorId Value="DisplayCollector">
+          <EventProviders>
+            <EventProviderId Value="Gpu" />
+            <EventProviderId Value="Dxgi" />
+            <EventProviderId Value="Dwm" />
+            <EventProviderId Value="Win32k" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

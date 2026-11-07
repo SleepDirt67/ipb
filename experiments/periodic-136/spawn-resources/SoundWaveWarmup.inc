@@ -1,9 +1,7 @@
 #ifdef IXR_WINDOWS
-#include "SoundWaveMetadata.h"
-#include <bcrypt.h>
+#include "SoundReadProof.h"
 #include <ppl.h>
 #include <algorithm>
-#include <array>
 #include <cstdlib>
 #include <mutex>
 #include <shared_mutex>
@@ -15,11 +13,11 @@
 namespace
 {
 using SoundWavePreparation::Metadata;
-using Digest = std::array<unsigned char, 32>;
+using SoundWavePreparation::ReadProof;
 
 struct PreparedSound
 {
-    Digest digest{};
+    ReadProof proof;
     Metadata metadata;
 };
 
@@ -33,51 +31,6 @@ bool AudioWarmupEnabled()
 }
 
 constexpr auto MaxWaveBytes = 512u * 1024;
-
-struct Sha256Provider
-{
-    BCRYPT_ALG_HANDLE algorithm = nullptr;
-    ULONG objectBytes = 0;
-
-    Sha256Provider()
-    {
-        if (BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-            return;
-        ULONG received = 0;
-        if (BCryptGetProperty(algorithm, BCRYPT_OBJECT_LENGTH,
-            reinterpret_cast<PUCHAR>(&objectBytes), sizeof(objectBytes), &received, 0) < 0 ||
-            received != sizeof(objectBytes))
-            objectBytes = 0;
-    }
-
-    ~Sha256Provider()
-    {
-        if (algorithm)
-            BCryptCloseAlgorithmProvider(algorithm, 0);
-    }
-};
-
-bool FileDigest(IReader& reader, Digest& digest)
-{
-    if (!reader.length() || reader.length() > MaxWaveBytes)
-        return false;
-
-    static const Sha256Provider provider;
-    if (!provider.objectBytes)
-        return false;
-    thread_local std::vector<unsigned char> work;
-    work.resize(provider.objectBytes);
-    BCRYPT_HASH_HANDLE hash = nullptr;
-    if (BCryptCreateHash(provider.algorithm, &hash, work.data(), provider.objectBytes,
-        nullptr, 0, 0) < 0)
-        return false;
-
-    const bool success = BCryptHashData(hash, static_cast<PUCHAR>(reader.pointer()),
-        static_cast<ULONG>(reader.length()), 0) >= 0 &&
-        BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) >= 0;
-    BCryptDestroyHash(hash);
-    return success;
-}
 
 constexpr ov_callbacks MetadataCallbacks{ov_read_func, ov_seek_func, ov_close_func, ov_tell_func};
 
@@ -185,19 +138,24 @@ void PrepareSpawnSoundMetadata()
     decltype(cache.entries) prepared;
     std::vector<WaveJob> batch;
     batch.reserve(128);
+    constexpr size_t MaxProofCacheBytes = 128 * 1024 * 1024;
+    size_t proofBytes = 0;
     auto finishBatch = [&] {
         // The loading thread owns VFS and publication. Each worker sees
         // immutable bytes and its own libvorbis state.
         concurrency::parallel_for(size_t{0}, batch.size(), [&](size_t index) {
             auto& job = batch[index];
             IReader cursor(job.bytes.data(), job.bytes.size());
-            job.prepared = FileDigest(cursor, job.result.digest) &&
-                SoundWavePreparation::Prepare(&cursor, MetadataCallbacks,
-                    OGG_COMMENT_VERSION, job.result.metadata);
+            job.prepared = SoundWavePreparation::PrepareWithReadProof(&cursor, MetadataCallbacks, job.bytes,
+                OGG_COMMENT_VERSION, job.result.metadata, job.result.proof);
         });
         for (auto& job : batch)
-            if (job.prepared)
-                prepared.emplace(std::move(job.path), job.result);
+        {
+            if (!job.prepared || job.result.proof.bytesCompared > MaxProofCacheBytes - proofBytes)
+                continue;
+            proofBytes += job.result.proof.bytesCompared;
+            prepared.emplace(std::move(job.path), std::move(job.result));
+        }
         batch.clear();
     };
 
@@ -206,7 +164,7 @@ void PrepareSpawnSoundMetadata()
     size_t opened = 0;
     for (const auto* file : ordered)
     {
-        if (bytes >= maxBytes || opened >= 24000)
+        if (bytes >= maxBytes || opened >= 24000 || proofBytes == MaxProofCacheBytes)
             break;
         string_path path;
         FS.update_path(path, "$game_sounds$", file->name.c_str());
@@ -225,8 +183,8 @@ void PrepareSpawnSoundMetadata()
     if (!batch.empty())
         finishBatch();
 
-    Msg("* sound metadata: prepared %zu of %zu opened OGG files (%llu MiB scanned)",
-        prepared.size(), opened, static_cast<unsigned long long>(bytes >> 20));
+    Msg("* sound metadata: prepared %zu of %zu opened OGG files (%llu MiB scanned, %zu KiB in read proofs)",
+        prepared.size(), opened, static_cast<unsigned long long>(bytes >> 20), proofBytes >> 10);
     std::unique_lock guard(cache.lock);
     cache.entries.swap(prepared);
 }
@@ -237,19 +195,15 @@ bool TryUsePreparedWave(IReader& reader, const char* path, Metadata& out)
         FS.m_Flags.is_any(CLocatorAPI::flBuildCopy | CLocatorAPI::flEBuildCopy | CLocatorAPI::flCacheFiles))
         return false;
 
-    PreparedSound candidate;
-    {
-        auto& cache = WaveCache();
-        std::shared_lock guard(cache.lock);
-        const auto found = cache.entries.find(path);
-        if (found == cache.entries.end())
-            return false;
-        candidate = found->second;
-    }
-    Digest digest;
-    if (!FileDigest(reader, digest) || digest != candidate.digest)
+    if (reader.tell() != 0 || reader.length() <= 0)
         return false;
-    out = candidate.metadata;
+    auto& cache = WaveCache();
+    std::shared_lock guard(cache.lock);
+    const auto found = cache.entries.find(path);
+    if (found == cache.entries.end() || !found->second.proof.matches({
+        static_cast<const unsigned char*>(reader.pointer()), static_cast<size_t>(reader.length())}))
+        return false;
+    out = found->second.metadata;
     return true;
 }
 #else

@@ -20,10 +20,8 @@ def edit(name, replacements):
     path.write_bytes(content.encode("utf-8"))
 
 
-shutil.copy2(source / "SoundWaveMetadata.h", engine / "src/xrSound/SoundWaveMetadata.h")
-edit("src/xrSound/CMakeLists.txt", [
-    ("setup_audio_libs(xrSound)", "setup_audio_libs(xrSound)\nif(WIN32)\n    target_link_libraries(xrSound PRIVATE bcrypt)\nendif()"),
-])
+for header in ("SoundWaveMetadata.h", "SoundReadProof.h"):
+    shutil.copy2(source / header, engine / "src/xrSound" / header)
 edit("src/xrSound/Sound.h", [
     ("#define OGG_COMMENT_VERSION", "XRSOUND_API void PrepareSpawnSoundMetadata();\n\n#define OGG_COMMENT_VERSION"),
 ])

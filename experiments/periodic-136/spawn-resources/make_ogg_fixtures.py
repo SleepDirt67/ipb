@@ -40,6 +40,28 @@ def comment(source, metadata):
     raise ValueError("comment not found")
 
 
+def longer_sound(source, change_middle=False):
+    pages = []
+    while source:
+        end = 27 + source[26]
+        size = end + sum(source[27:end])
+        pages.append(source[:size])
+        source = source[size:]
+    assert len(pages) == 3 and pages[2][5] == 4
+    audio = pages.pop()
+    samples = struct.unpack_from("<Q", audio, 6)[0]
+    for index in range(1024):
+        page = bytearray(audio)
+        page[5] = 4 if index == 1023 else 0
+        struct.pack_into("<Q", page, 6, samples * (index + 1))
+        struct.pack_into("<II", page, 18, index + 2, 0)
+        if change_middle and index == 512:
+            page[-1] ^= 1
+        struct.pack_into("<I", page, 22, crc(page))
+        pages.append(page)
+    return b"".join(pages)
+
+
 target = Path(sys.argv[1])
 target.mkdir(parents=True, exist_ok=True)
 m = base64.b64decode(mono)
@@ -47,7 +69,10 @@ s = base64.b64decode(stereo)
 v1 = comment(m, struct.pack("<IffI", 1, 2.0, 190.0, 10))
 v2 = comment(s, struct.pack("<IfffI", 2, 3.0, 180.0, .75, 11))
 v3 = comment(m, struct.pack("<IfffIf", 3, 4.0, 170.0, .625, 12, 250.0))
+long = longer_sound(v3)
 for name, data in {
+    "long": long, "long-audio-edit": longer_sound(v3, change_middle=True),
+    "long-comment-edit": comment(long, struct.pack("<IfffIf", 3, 5.0, 170.0, .625, 12, 250.0)),
     "v1": v1, "v2": v2, "v3": v3, "chained": v3 + v2,
     "bad-comment": comment(m, struct.pack("<I", 999)), "bad-stream": m[:20],
     "unrecognised": m,

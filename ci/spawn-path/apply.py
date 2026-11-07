@@ -115,8 +115,8 @@ edit("xrGame/script_game_object2.cpp", [
 edit("xrGame/Level.cpp", [
     ("\t\t\tswitch (ID)\n\t\t\t{\n\t\t\tcase M_SPAWN:",
      "\t\t\tPacingDiag::SpawnSpan otherEvent(PacingDiag::Kind::OtherGameEvent,\n"
-     "\t\t\t    ID | (static_cast<unsigned long long>(type) << 16) |\n"
-     "\t\t\t    (static_cast<unsigned long long>(dest) << 32), false, ID != M_SPAWN);\n"
+     "\t\t\t    ID == M_EVENT ? ID | (static_cast<unsigned long long>(type) << 16) |\n"
+     "\t\t\t        (static_cast<unsigned long long>(dest) << 32) : ID, false, ID != M_SPAWN);\n"
      "\t\t\tswitch (ID)\n\t\t\t{\n\t\t\tcase M_SPAWN:"),
 ])
 edit("xrGame/alife_switch_manager.cpp", [

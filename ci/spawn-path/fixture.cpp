@@ -1,5 +1,4 @@
 #include <windows.h>
-#include <stdexcept>
 extern "C" {
 #include <lua/lua.h>
 #include <lua/lauxlib.h>
@@ -39,7 +38,12 @@ int main()
         if (PacingDiag::SpawnBinderPhase() != Kind::BinderNetSpawn)
             return 4;
         const char* script =
-            "local function work() local now=os.clock() while os.clock()-now < 0.3 do end end\n"
+            "local function work()\n"
+            "  local start, now = os.clock(), os.clock()\n"
+            "  while now - start < 0.3 do\n"
+            "    now = os.clock()\n"
+            "  end\n"
+            "end\n"
             "work()\nreturn 42";
         if (luaL_loadbuffer(state, script, strlen(script), "@spawn_path_fixture.script")
             || lua_pcall(state, 0, 1, 0) || lua_tointeger(state, -1) != 42)
@@ -52,6 +56,6 @@ int main()
         return 7;
     SpawnLuaProfile::Stop(state);
     lua_close(state);
-    std::printf("PASS: exact Windows LuaJIT returned 42, nested binder scopes restored, %u stack rows\n", count);
+    std::printf("PASS: LuaJIT returned 42, nested binder scopes restored, %u stack rows\n", count);
     return 0;
 }

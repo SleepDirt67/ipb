@@ -79,6 +79,10 @@ def summarize(directory):
         return {
             "kind": KINDS[kind], "tid": tid, "qpc_start": start, "qpc_end": end,
             "payload": payload, "duration_ms": ms(end - start),
+            "spawn_dispatch": [{"id": value & 65535, "parent": value >> 16,
+                                "qpc_start": low, "qpc_end": high}
+                               for low, high, part, thread, value in by_frame[frame]
+                               if part == 32 and thread == tid and start <= low <= high <= end],
             "nested_ms": {KINDS[k]: ms(union(v, start, end)) for k, v in sorted(nested.items()) if v},
             "binder_union_ms": ms(union(binder, start, end)),
             "outside_binder_ms": ms(end - start - union(binder, start, end)),
@@ -102,7 +106,6 @@ def summarize(directory):
                                "spawn_event_count": len(spawns), "spawn_event_sum_ms": spawn_ms,
                                "events": [detail(frame, row) for row in roots]})
         previous = start, segment
-    aligned = len(presents)
     presentmon = directory / "presentmon.csv"
     if presentmon.is_file():
         _, present_join = join_presents(presentmon, pid, presents, hz)
@@ -110,7 +113,7 @@ def summarize(directory):
         present_join = None
     return {
         "engine_dropped": meta["dropped"], "lua_dropped": sample_drops,
-        "lua_callbacks": sum(map(len, samples.values())), "engine_presents": aligned,
+        "lua_callbacks": sum(map(len, samples.values())), "engine_presents": len(presents),
         "presentmon_join": present_join,
         "method": "Lua hook stack and timer VM state may differ in time. Coalesced samples have one observed stack. Native spans are inclusive.",
         "frames": sorted(frames, key=lambda frame: frame["present_gap_ms"], reverse=True),

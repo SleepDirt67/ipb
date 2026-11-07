@@ -81,8 +81,8 @@ namespace SpawnLuaProfile
         capture->stop = stop;
         capture->dump = dump;
         recorder = std::move(capture);
-        // Plain sampling leaves LuaJIT's line/function compilation modes alone.
-        start(state, "i1", SampleBinder, recorder.get());
+        // Line mode gives compiled traces polling points. This is diagnostic-only.
+        start(state, "li1", SampleBinder, recorder.get());
     }
 
     inline void Stop(lua_State* state)

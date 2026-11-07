@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn coverage
+name: IX-Ray Windows x64 critical path
 on:
   push:
     branches: [main, 'experiment/**']
@@ -335,6 +335,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Sound coverage overlay failed' }
           python ci/spawn-coverage/lua.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Lua function guard overlay failed' }
+          python ci/spawn-critical-path/packed_audio.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Packed wave preparation overlay failed' }
+          python ci/spawn-critical-path/details.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Detail expansion overlay failed' }
+
+      - name: Test exact detail grid shifts and live packed sound mappings
+        shell: pwsh
+        run: |
+          cmake -S ci/spawn-critical-path -B checks/critical-path -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Critical path fixture configure failed' }
+          cmake --build checks/critical-path --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Critical path fixture compile failed' }
+          & checks/critical-path/Release/critical_fixture.exe | Tee-Object checks/CRITICAL_PATH_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Critical path differential failed' }
 
       - name: Configure engine
         shell: pwsh
@@ -496,7 +510,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Spawn-Coverage-Windows-x64
+          name: IXRay-1.3.6-Critical-Path-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

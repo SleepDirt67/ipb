@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.20)
+project(ixray_critical_path_fixture LANGUAGES CXX)
+add_executable(critical_fixture critical_fixture.cpp)
+target_compile_features(critical_fixture PRIVATE cxx_std_20)
+target_compile_definitions(critical_fixture PRIVATE NOMINMAX)

@@ -14,3 +14,5 @@ add_executable(spawn_profile_fixture fixture.cpp)
 target_compile_definitions(spawn_profile_fixture PRIVATE NOMINMAX)
 target_include_directories(spawn_profile_fixture PRIVATE "${ENGINE}/sdk/include" "${ENGINE}/src/xrScripts")
 target_link_libraries(spawn_profile_fixture PRIVATE "${LUA_LIB}")
+
+add_executable(spawn_fragment_fixture ../spawn-coverage/fragment_fixture.cpp)

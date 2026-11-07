@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn preparation
+name: IX-Ray Windows x64 spawn coverage
 on:
   push:
     branches: [main, 'experiment/**']
@@ -331,6 +331,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Stock conditions overlay failed' }
           python ci/spawn-preparation/apply.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Spawn preparation overlay failed' }
+          python ci/spawn-coverage/audio.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Sound coverage overlay failed' }
+          python ci/spawn-coverage/lua.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Lua function guard overlay failed' }
 
       - name: Configure engine
         shell: pwsh
@@ -416,6 +420,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Spawn path QA configure failed' }
           cmake --build checks/spawn-path --config Release --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'Spawn path QA compile failed' }
+          & checks/spawn-path/Release/spawn_fragment_fixture.exe | Tee-Object checks/SPAWN_LUA_FRAGMENT_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Lua function matching fixture failed' }
           $env:IXRAY_PACING_DIR = (Resolve-Path checks/spawn-path).Path
           Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') checks/spawn-path/Release/
           $env:IXRAY_SPAWN_LUA = '1'
@@ -490,7 +496,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Spawn-Preparation-Windows-x64
+          name: IXRay-1.3.6-Spawn-Coverage-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

@@ -20,7 +20,7 @@
   "ci/spawn-coverage/SoundRangeDigest.h": "6e4252b66a05c975856c7b9f91f3a2a11bcd3b335c9d4d7af4c1d2145ba53796",
   "ci/spawn-coverage/audio.py": "61996fbb5e5b8c9e0a64e68d95671ee346fa3a1c7c19ad0df5daecb6b18628b4",
   "ci/spawn-coverage/fragment_fixture.cpp": "570e64b91a993f121b922e954eb0a82027aa932d4a48efd0847808ee9bcbf512",
-  "ci/spawn-coverage/lua.py": "720bf1765d5008213adc0c9846e7e5f848cdfa224ba3dc1645e4164bd000a9a4",
+  "ci/spawn-coverage/lua.py": "898ea7afededfbfce4bd7a6887330c6cf1dfd8489b4b94d1e9ca50e4ba10950f",
   "ci/spawn-path/CMakeLists.txt": "36781aa96711531d8b8daf16825878b9e467a3bfc0c0a2072d2952387e4ba6c4",
   "ci/spawn-path/SpawnLuaProfile.h": "15f70e309f45312b5e9d2c34867b32facf40b50505068658f0f38ab4526c0be0",
   "ci/spawn-path/analyze_spawn_path.py": "6b010954b1b649dbda4abd61b0bc72f527b8cdcbd366f48640c42c1e3977ba84",

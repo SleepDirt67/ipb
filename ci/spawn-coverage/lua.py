@@ -69,13 +69,16 @@ std::string PrepareCompatibleLogic(std::string_view data)
     constexpr std::string_view end = "\\n\\treturn lst\\nend";
     const auto stock = Source(stockLogic);
     const auto prepared = Source(preparedStockLogic);
-    const auto startStock = stock.find(start);
-    const auto endStock = stock.find(end, stock.find(parse));
-    const auto startPrepared = prepared.find(start);
-    const auto tables = prepared.find("local compiled_conditions = {}", startPrepared);
+    const auto parseStock = stock.find("function parse_condlist(npc, section, field, src)\\n\\tlocal lst = {}");
+    const auto tables = prepared.find("local compiled_conditions = {}");
+    if (parseStock == stock.npos || tables == prepared.npos)
+        return {};
+    const auto startStock = stock.rfind(start, parseStock);
+    const auto endStock = stock.find(end, parseStock);
+    const auto startPrepared = prepared.rfind(start, tables);
     const auto endPrepared = prepared.find(end, prepared.find(parse, tables));
     if (startStock == stock.npos || endStock == stock.npos || startPrepared == prepared.npos ||
-        tables == prepared.npos || endPrepared == prepared.npos)
+        endPrepared == prepared.npos)
         return {};
 
     const auto match = SpawnLuaSource::FindUnique(data, stock.substr(startStock, endStock + end.size() - startStock));

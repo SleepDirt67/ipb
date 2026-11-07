@@ -299,7 +299,7 @@ jobs:
           cmake --build checks/shader-warmup --config Release --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture build failed' }
           & checks/shader-warmup/Release/ixray_shader_warmup.exe "$env:GITHUB_WORKSPACE/ixray/gamedata/shaders" "$env:RUNNER_TEMP/ixray-shader-prewarm" | Tee-Object checks/PACING_SHADER_WARMUP_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture failed' }
+          if ($LASTEXITCODE -ne 0) { throw "Shader prewarm fixture failed (exit $LASTEXITCODE)" }
 
       - name: Checkout the exact Luabind dependency used by Shader Warmup
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

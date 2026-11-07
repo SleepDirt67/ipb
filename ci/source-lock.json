@@ -1,6 +1,6 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
-  ".github/workflows/windows-release.yml": "94b105dec58abc307963c936c80e2bbd5121ce14a4368d3002adde2b1cf69511",
+  ".github/workflows/windows-release.yml": "b535e0c26fb197a75be66b22ebcb99ff0c579b5ba46aff459089632d54a71cfc",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -35,7 +35,7 @@
   "ci/spawn-path/package_capture.py": "2ae0b45ce60ae462d6d09d98f2574630fcef2acee07fe91f5cc64582f406c5d6",
   "ci/spawn-preparation/SoundWaveReadWitness.h": "ed4e399ee363d3b398c3da4fe1c42cfbb53b060a9a06fbc2b0acf44903aacca1",
   "ci/spawn-preparation/apply.py": "6bad9f1482d72f090c67643b69add835e35fe2480ac98af792f01a3c96e41c85",
-  "ci/spawn-preparation/shader_fixture.cpp": "685a9d1cdec73c2d840100e8e112ccc906892fe9c2760d258480b5c396605dbe",
+  "ci/spawn-preparation/shader_fixture.cpp": "cc89264ccd7475f7ca4d90ab1a1fcc92fd5418716b6d221d24f8d455f55575e1",
   "ci/spawn-preparation/shaders.py": "f62518dee9ad1b0a87e8bcb311ec32d5820d31e9f8d2de34575239826909e676",
   "ci/spawn-preparation/voice.py": "b8bbfe4700d468a3fef99f662f4cd00f34c847743e21fa3289f2ac88bd66595e",
   "ci/spawn-preparation/voice_catalog_fixture.cpp": "da9e15f5f00557c3f6fa28d7fdb7132bf3b9a34e9b8a4e296c1f1e3f45e2604d",

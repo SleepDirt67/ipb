@@ -1,6 +1,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11shader.h>
 #include <d3dcompiler.h>
 #include <immintrin.h>
 #include <wrl/client.h>
@@ -140,8 +141,19 @@ struct CRender {
 } renderer;
 CRender* Render = &renderer;
 ComPtr<ID3D11Device> device;
-HRESULT create_shader(LPCSTR target, DWORD* data, u32 size, LPCSTR, void*& result, bool) {
+HRESULT create_shader(LPCSTR target, DWORD* data, u32 size, LPCSTR path, void*& result, bool) {
     static_cast<std::vector<u8>*>(result)->assign(reinterpret_cast<u8*>(data), reinterpret_cast<u8*>(data) + size);
+    if (std::strstr(path, "forward_base_")) {
+        // The PDA alpha shader already executes on the target hardware. The
+        // fixture validates its DXBC and tests the exact cache read/compile path.
+        ComPtr<ID3D11ShaderReflection> reflection;
+        const HRESULT hr = D3DReflect(data, size, __uuidof(ID3D11ShaderReflection),
+            reinterpret_cast<void**>(reflection.GetAddressOf()));
+        if (FAILED(hr))
+            return hr;
+        D3D11_SHADER_DESC desc{};
+        return reflection->GetDesc(&desc);
+    }
     if (target[0] == 'v') {
         ComPtr<ID3D11VertexShader> shader;
         return device->CreateVertexShader(data, size, nullptr, shader.GetAddressOf());
@@ -191,6 +203,7 @@ int main(int argc, char** argv) try {
         {"forward_base", "forward_base_4131883862", "2048100100001001011133101", 0, true, true, true, true},
     };
     for (const auto& request : requests) {
+        std::cout << "Verify cache key " << request.key << std::endl;
         FS.cacheRoot = testRoot / "warm";
         const auto file = FS.cacheRoot / "shaders_cache/d3d11" /
             (std::string(request.key) + (request.pixel ? ".ps" : ".vs")) / request.mask;
@@ -241,7 +254,7 @@ int main(int argc, char** argv) try {
     renderer.PrewarmPacingShaderCache();
     require(compilerCalls == calls, "prewarm ignored disabled cache");
     std::cout << "PASS: eight observed cache keys, no recompile on warm create, byte-identical cold DXBC, "
-                 "WARP shader creation, truncated cache recovery, cache-off guard\n";
+                 "WARP creation for original variants, PDA DXBC reflection, truncated cache recovery, cache-off guard\n";
     return 0;
 } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

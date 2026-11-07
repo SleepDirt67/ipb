@@ -1,0 +1,575 @@
+--- a/src/Layers/xrRenderDX10/dx11Texture.cpp
++++ b/src/Layers/xrRenderDX10/dx11Texture.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ 
+ #include <memory>
+ #include <DirectXTex.h>
+@@ -118,6 +119,7 @@
+ 
+ ID3DBaseTexture* CRender::texture_load(LPCSTR fRName, u32& ret_msize, bool bStaging)
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::TextureLoad);
+ 	// Moved here just to avoid warning
+ 	TexMetadata imageInfo{};
+ 
+--- a/src/xrEngine/EngineThreading.cpp
++++ b/src/xrEngine/EngineThreading.cpp
+@@ -39,18 +39,20 @@
+ 
+ void XRay::Engine::GameThread()
+ {
+-    FrameStallDiag::Scope diagnosticGameThread(FrameStallDiag::Stage::GameThread);
++    FrameStallDiag::DetailScope diagnosticGameThread(FrameStallDiag::Stage::GameThread);
+ 	// Game task labels are already supplied to the profiler.
+ 
+ 	PROF_THREAD("X-Ray Game Thread")
+ 		// we has granted permission to execute
+ 	{
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::HudMT);
+ 		PROF_EVENT("g_hud OnFrameMT")
+ 			if (g_hud)
+ 				g_hud->OnFrameMT();
+ 	}
+ 
+ 	{
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::SoundDispatch);
+ 		PROF_EVENT("SoundEvent_Dispatch")
+ 			if (g_pGameLevel && g_pGameLevel->bReady)
+ 				g_pGameLevel->SoundEvent_Dispatch();
+@@ -65,12 +67,16 @@
+ 
+ 	{
+ 		PROF_EVENT("seqParallel")
+-			for (u32 pit = 0; pit < Device.seqParallel.size(); pit++)
+-				Device.seqParallel[pit]();
++            for (u32 pit = 0; pit < Device.seqParallel.size(); pit++)
++            {
++                FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ParallelTasks);
++                Device.seqParallel[pit]();
++            }
+ 		Device.seqParallel.resize(0);
+ 	}
+ 
+ 	{
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::FrameMT);
+ 		PROF_EVENT("seqFrameMT")
+ 			Device.seqFrameMT.Process(rp_Frame);
+ 	}
+--- a/src/xrEngine/FrameStallDiagnostics.h
++++ b/src/xrEngine/FrameStallDiagnostics.h
+@@ -11,6 +11,11 @@
+         SpawnEvent, ObjectCreate, ObjectNetSpawn, ModelLoad, ModelDefer,
+         SchedulerRT, SchedulerNormal, GameObjectBase, ObjectBase,
+         BinderReload, BinderSpawn, SpawnSupplies, ObjectPoolCreate,
++        HudMT, SoundDispatch, ParallelTasks, FrameMT, LevelFrame, ClientReceive,
++        ObjectUpdate, HudMain, TaskUpdate, UILockWait, UIUpdate,
++        ScriptLoad, ScriptCompile, ScriptExecute, InputFrame,
++        ALifeUpdate, MapUpdate, CallbackMain, CallbackMT,
++        ActorMenuMode, InventoryBuild, ItemInfoInit, TextureLoad,
+         Count
+     };
+ 
+@@ -20,6 +25,40 @@
+     ENGINE_API void Record(Stage stage, unsigned frame, unsigned long long us);
+     ENGINE_API void FinishFrame(unsigned frame, double totalMs);
+     ENGINE_API void RecordScheduled(bool rt, unsigned frame, unsigned long long us, const char* name);
++
++    ENGINE_API unsigned long long ThreadCycles();
++    ENGINE_API bool IsMainThread();
++    ENGINE_API void RecordCycles(Stage stage, unsigned frame, unsigned long long cycles);
++    ENGINE_API void RecordWorst(Stage stage, unsigned frame, unsigned long long us, const char* name);
++
++    class DetailScope
++    {
++        Stage stage_;
++        bool active_;
++        unsigned frame_;
++        char name_[96] = {};
++        std::chrono::steady_clock::time_point start_;
++        unsigned long long cycles_;
++    public:
++        explicit DetailScope(Stage stage, const char* name = nullptr)
++            : stage_(stage), active_(Enabled()), frame_(active_ ? CurrentFrame() : 0),
++              start_(active_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}),
++              cycles_(active_ ? ThreadCycles() : 0)
++        {
++            if (active_ && name) strncpy_s(name_, sizeof(name_), name, _TRUNCATE);
++        }
++        ~DetailScope()
++        {
++            if (!active_ || frame_ == 0) return;
++            const auto cycles = ThreadCycles();
++            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_).count();
++            Record(stage_, frame_, us > 0 ? static_cast<unsigned long long>(us) : 0);
++            RecordCycles(stage_, frame_, cycles >= cycles_ ? cycles - cycles_ : 0);
++            if (name_[0]) RecordWorst(stage_, frame_, us > 0 ? static_cast<unsigned long long>(us) : 0, name_);
++        }
++        DetailScope(const DetailScope&) = delete;
++        DetailScope& operator=(const DetailScope&) = delete;
++    };
+ 
+     // Scopes can be disabled explicitly with IXRAY_TRACE_FRAME_STALLS=0.
+     class Scope
+--- a/src/xrEngine/IGame_Level.cpp
++++ b/src/xrEngine/IGame_Level.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "FrameStallDiagnostics.h"
+ #include "IGame_Level.h"
+ #include "IGame_Persistent.h"
+ 
+@@ -190,8 +191,8 @@
+ 	{
+ 		IAnimNotifyHandler::Get().Update();
+ 	}
+-	Objects.Update				(false);
+-	g_hud->OnFrame				();
++    { FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ObjectUpdate); Objects.Update(false); }
++    { FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::HudMain); g_hud->OnFrame(); }
+ 
+ 	// Ambience
+ 	if (Sounds_Random.size() && (Device.dwTimeGlobal > Sounds_Random_dwNextTime))
+--- a/src/xrEngine/Xr_input.cpp
++++ b/src/xrEngine/Xr_input.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "FrameStallDiagnostics.h"
+ 
+ 
+ #include "xr_input.h"
+@@ -519,6 +520,7 @@
+ 
+ void CInput::OnFrame()
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::InputFrame);
+ 	PROF_EVENT("CInput::OnFrame");
+ 	CScopeTimer Input(RDEVICE.Statistic->Input);
+ 
+--- a/src/xrEngine/device.cpp
++++ b/src/xrEngine/device.cpp
+@@ -1,6 +1,9 @@
+ #include "stdafx.h"
+ #include "FrameStallDiagnostics.h"
+ #include <atomic>
++#include <cstdio>
++#include <vector>
++#include <array>
+ 
+ #include "../xrCore/Collision/Frustum.h"
+ 
+@@ -155,12 +158,83 @@
+         struct Sample
+         {
+             WorstSchedule worst[2];
++            // One writer per lane: main-thread binder/main callbacks; worker parallel/MT callbacks.
++            WorstSchedule detailWorst[4];
++            unsigned long long qpcStart = 0, mainCyclesStart = 0;
++            std::atomic<unsigned long long> cycles[kStages]{};
+             std::atomic<unsigned> frame{0};
+             std::atomic<unsigned long long> us[kStages]{};
+             std::atomic<unsigned> count[kStages]{};
+         };
+         Sample samples[kHistory];
++        struct TraceRow
++        {
++            unsigned frame;
++            unsigned long long qpcStart, qpcEnd, mainCycles;
++            double totalMs;
++            std::array<unsigned long long, kStages> us, cycles;
++            std::array<unsigned, kStages> count;
++            WorstSchedule worst[6];
++        };
++        struct TraceBuffer
++        {
++            // Fixed capacity; no file writes during gameplay and no unbounded growth.
++            // Set IXRAY_TRACE_ALL_FRAMES=0 for a performance-only comparison.
++            static constexpr size_t capacity = 65536;
++            std::vector<TraceRow> rows;
++            unsigned dropped = 0;
++            unsigned long long frequency = 0, utc = 0, origin = 0;
++            char path[1024] = {};
++            bool initialized = false, enabled = false;
++            void Initialize()
++            {
++                if (initialized) return;
++                initialized = true;
++                char flag[2] = {};
++                enabled = !(GetEnvironmentVariableA("IXRAY_TRACE_ALL_FRAMES", flag, sizeof(flag)) == 1 && flag[0] == '0');
++                if (!enabled) return;
++                LARGE_INTEGER q, f;
++                QueryPerformanceFrequency(&f);
++                QueryPerformanceCounter(&q);
++                FILETIME ft;
++                using PreciseTime = void (WINAPI*)(LPFILETIME);
++                const auto preciseTime = reinterpret_cast<PreciseTime>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetSystemTimePreciseAsFileTime"));
++                if (preciseTime) preciseTime(&ft); else GetSystemTimeAsFileTime(&ft);
++                frequency = f.QuadPart;
++                origin = q.QuadPart;
++                utc = (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
++                string_path logs;
++                FS.update_path(logs, "$logs$", "");
++                sprintf_s(path, sizeof(path), "%sixray_frames_%lu_%llu.csv", logs, GetCurrentProcessId(), utc);
++                rows.reserve(capacity);
++            }
++            ~TraceBuffer()
++            {
++                if (!enabled || rows.empty()) return;
++                FILE* output = nullptr;
++                if (fopen_s(&output, path, "wb") != 0 || !output) return;
++                fprintf(output, "#version=3,qpc_frequency=%llu,qpc_origin=%llu,utc_filetime=%llu,dropped=%u,capacity=%zu\n",
++                    frequency, origin, utc, dropped, capacity);
++                fprintf(output, "frame,qpc_start,qpc_end,main_cycles,total_ms");
++                for (unsigned i = 0; i < kStages; ++i) fprintf(output, ",s%u_us,s%u_cycles,s%u_n", i, i, i);
++                fprintf(output, ",rt_name,rt_us,nonrt_name,nonrt_us,binder_name,binder_us,parallel_name,parallel_us,main_callback_name,main_callback_us,mt_callback_name,mt_callback_us\n");
++                for (const auto& row : rows)
++                {
++                    fprintf(output, "%u,%llu,%llu,%llu,%.6f", row.frame, row.qpcStart, row.qpcEnd, row.mainCycles, row.totalMs);
++                    for (unsigned i = 0; i < kStages; ++i) fprintf(output, ",%llu,%llu,%u", row.us[i], row.cycles[i], row.count[i]);
++                    for (const auto& worst : row.worst)
++                    {
++                        fputc(',', output); fputc('"', output);
++                        for (const char* c = worst.name; *c; ++c) { if (*c == '"') fputc('"', output); fputc(*c, output); }
++                        fputc('"', output); fprintf(output, ",%llu", worst.us);
++                    }
++                    fputc('\n', output);
++                }
++                fclose(output);
++            }
++        } traceBuffer;
+         std::atomic<unsigned> activeFrame{0};
++        std::atomic<DWORD> mainThreadId{0};
+ 
+         double ms(const Sample& s, Stage stage)
+         {
+@@ -190,13 +264,21 @@
+     void BeginFrame(unsigned frame)
+     {
+         if (!Enabled()) return;
++        mainThreadId.store(GetCurrentThreadId(), std::memory_order_relaxed);
++        traceBuffer.Initialize();
+         Sample& s = samples[frame % kHistory];
++        LARGE_INTEGER q;
++        QueryPerformanceCounter(&q);
++        s.qpcStart = q.QuadPart;
++        s.mainCyclesStart = ThreadCycles();
+         s.frame.store(0, std::memory_order_release);
+         for (unsigned i = 0; i != kStages; ++i)
+         {
++            s.cycles[i].store(0, std::memory_order_relaxed);
+             s.us[i].store(0, std::memory_order_relaxed);
+             s.count[i].store(0, std::memory_order_relaxed);
+         }
++        for (auto& worst : s.detailWorst) worst = WorstSchedule{};
+         s.worst[0].us = 0;
+         s.worst[0].name[0] = 0;
+         s.worst[1].us = 0;
+@@ -232,9 +314,66 @@
+         }
+     }
+ 
++    bool IsMainThread() { return GetCurrentThreadId() == mainThreadId.load(std::memory_order_relaxed); }
++
++    unsigned long long ThreadCycles()
++    {
++        ULONG64 value = 0;
++        QueryThreadCycleTime(GetCurrentThread(), &value);
++        return value;
++    }
++
++    void RecordCycles(Stage stage, unsigned frame, unsigned long long cycles)
++    {
++        if (!Enabled() || !frame) return;
++        Sample& s = samples[frame % kHistory];
++        if (s.frame.load(std::memory_order_acquire) != frame) return;
++        s.cycles[static_cast<unsigned>(stage)].fetch_add(cycles, std::memory_order_relaxed);
++    }
++
++    void RecordWorst(Stage stage, unsigned frame, unsigned long long us, const char* name)
++    {
++        if (!Enabled() || !frame) return;
++        Sample& s = samples[frame % kHistory];
++        if (s.frame.load(std::memory_order_acquire) != frame) return;
++        const unsigned lane = stage == Stage::BinderSpawn ? 0 : (stage == Stage::ParallelTasks || stage == Stage::ALifeUpdate || stage == Stage::MapUpdate) ? 1 : stage == Stage::CallbackMain ? 2 : 3;
++        WorstSchedule& worst = s.detailWorst[lane];
++        if (us > worst.us)
++        {
++            worst.us = us;
++            strncpy_s(worst.name, sizeof(worst.name), name ? name : "?", _TRUNCATE);
++        }
++    }
++
+     void FinishFrame(unsigned frame, double totalMs)
+     {
+-        if (!Enabled() || totalMs < 16.0) return;
++        if (!Enabled()) return;
++        Sample& capture = samples[frame % kHistory];
++        if (capture.frame.load(std::memory_order_acquire) != frame) return;
++        if (traceBuffer.enabled)
++        {
++            if (traceBuffer.rows.size() < TraceBuffer::capacity)
++            {
++                LARGE_INTEGER q;
++                QueryPerformanceCounter(&q);
++                TraceRow row{};
++                row.frame = frame; row.qpcStart = capture.qpcStart; row.qpcEnd = q.QuadPart;
++                const auto cycles = ThreadCycles();
++                row.mainCycles = cycles >= capture.mainCyclesStart ? cycles - capture.mainCyclesStart : 0;
++                row.totalMs = totalMs;
++                for (unsigned i = 0; i < kStages; ++i)
++                {
++                    row.us[i] = capture.us[i].load(std::memory_order_relaxed);
++                    row.cycles[i] = capture.cycles[i].load(std::memory_order_relaxed);
++                    row.count[i] = capture.count[i].load(std::memory_order_relaxed);
++                }
++                row.worst[0] = capture.worst[0]; row.worst[1] = capture.worst[1];
++                for (unsigned i = 0; i < 4; ++i) row.worst[i + 2] = capture.detailWorst[i];
++                traceBuffer.rows.push_back(row);
++            }
++            else ++traceBuffer.dropped;
++        }
++        if (totalMs < 16.0) return;
+         const auto now = std::chrono::steady_clock::now();
+         static auto lastReport = now - std::chrono::seconds(1);
+         if (now - lastReport < std::chrono::milliseconds(250)) return;
+@@ -257,6 +396,15 @@
+             ms(s, Stage::GameObjectBase), ms(s, Stage::ObjectBase),
+             ms(s, Stage::BinderReload), ms(s, Stage::BinderSpawn),
+             ms(s, Stage::SpawnSupplies), ms(s, Stage::ObjectPoolCreate));
++        Msg("! FRAMEDETAIL3 frame=%u qpc=%llu hud_mt=%.2f sound=%.2f parallel=%.2f frame_mt=%.2f level=%.2f receive=%.2f objects=%.2f hud_main=%.2f tasks=%.2f ui_lock=%.2f ui=%.2f script_load=%.2f compile=%.2f execute=%.2f input=%.2f binder_worst=%s/%.2f parallel_worst=%s/%.2f callback_worst=%s/%.2f mt_callback_worst=%s/%.2f",
++            frame, s.qpcStart, ms(s, Stage::HudMT), ms(s, Stage::SoundDispatch), ms(s, Stage::ParallelTasks), ms(s, Stage::FrameMT),
++            ms(s, Stage::LevelFrame), ms(s, Stage::ClientReceive), ms(s, Stage::ObjectUpdate), ms(s, Stage::HudMain),
++            ms(s, Stage::TaskUpdate), ms(s, Stage::UILockWait), ms(s, Stage::UIUpdate), ms(s, Stage::ScriptLoad),
++            ms(s, Stage::ScriptCompile), ms(s, Stage::ScriptExecute), ms(s, Stage::InputFrame),
++            s.detailWorst[0].name, double(s.detailWorst[0].us) / 1000.0,
++            s.detailWorst[1].name, double(s.detailWorst[1].us) / 1000.0,
++            s.detailWorst[2].name, double(s.detailWorst[2].us) / 1000.0,
++            s.detailWorst[3].name, double(s.detailWorst[3].us) / 1000.0);
+     }
+ }
+ 
+--- a/src/xrEngine/pure.cpp
++++ b/src/xrEngine/pure.cpp
+@@ -2,6 +2,8 @@
+ 
+ 
+ #include "pure.h"
++#include "FrameStallDiagnostics.h"
++#include <typeinfo>
+ 
+ //ENGINE_API int	__cdecl	_REG_Compare(const void *e1, const void *e2)
+ //{
+@@ -10,7 +12,13 @@
+ //	return (p2->Prio - p1->Prio);
+ //}
+ 
+-DECLARE_RP(Frame);
++void rp_Frame(void* object)
++{
++    auto* callback = static_cast<pureFrame*>(object);
++    const auto stage = FrameStallDiag::IsMainThread() ? FrameStallDiag::Stage::CallbackMain : FrameStallDiag::Stage::CallbackMT;
++    FrameStallDiag::DetailScope detail(stage, FrameStallDiag::Enabled() ? typeid(*callback).name() : nullptr);
++    callback->OnFrame();
++}
+ DECLARE_RP(Render);
+ DECLARE_RP(AppActivate);
+ DECLARE_RP(AppDeactivate);
+--- a/src/xrGame/HUDManager.cpp
++++ b/src/xrGame/HUDManager.cpp
+@@ -1,4 +1,5 @@
+ #include "StdAfx.h"
++#include "../xrEngine/FrameStallDiagnostics.h"
+ #include "HUDManager.h"
+ #include "HUDTarget.h"
+ #include "Actor.h"
+@@ -58,10 +59,23 @@
+ 		return;
+ 	PROF_EVENT("CHUDManager::OnFrameMT");
+ 
+-	if (Device.dwPrecacheFrame == 0)
+-		Level().GameTaskManager()->UpdateTasks();
+-
+-	xrCriticalSectionGuard guard(&ui_lock);
++    if (Device.dwPrecacheFrame == 0)
++    {
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::TaskUpdate);
++        Level().GameTaskManager()->UpdateTasks();
++    }
++    // Separate lock acquisition from work under the lock, retaining RAII unlock.
++    const auto lockStart = FrameStallDiag::Enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++    const unsigned frame = FrameStallDiag::CurrentFrame();
++    const auto cycles = FrameStallDiag::Enabled() ? FrameStallDiag::ThreadCycles() : 0;
++    xrCriticalSectionGuard guard(&ui_lock);
++    if (FrameStallDiag::Enabled())
++    {
++        FrameStallDiag::Record(FrameStallDiag::Stage::UILockWait, frame,
++            static_cast<unsigned long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - lockStart).count()));
++        FrameStallDiag::RecordCycles(FrameStallDiag::Stage::UILockWait, frame, FrameStallDiag::ThreadCycles() - cycles);
++    }
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::UIUpdate);
+ 	if (pUIGame) 
+ 		pUIGame->OnFrame();
+ }
+--- a/src/xrGame/Level.cpp
++++ b/src/xrGame/Level.cpp
+@@ -565,6 +565,7 @@
+ 
+ void CLevel::OnFrame()
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::LevelFrame);
+ #ifdef DEBUG
+ 	DBG_RenderUpdate();
+ #endif // #ifdef DEBUG
+@@ -598,7 +599,7 @@
+ 
+ 		Device.Statistic->netClient1.Begin();
+ 
+-		ClientReceive();
++    { FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ClientReceive); ClientReceive(); }
+ 
+ 		Device.Statistic->netClient1.End();
+ 	}
+--- a/src/xrGame/alife_update_manager.cpp
++++ b/src/xrGame/alife_update_manager.cpp
+@@ -7,6 +7,7 @@
+ ////////////////////////////////////////////////////////////////////////////
+ 
+ #include "StdAfx.h"
++#include "../xrEngine/FrameStallDiagnostics.h"
+ #include "alife_update_manager.h"
+ #include "alife_simulator_header.h"
+ #include "alife_time_manager.h"
+@@ -108,6 +109,7 @@
+ 
+ void CALifeUpdateManager::update()
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ALifeUpdate, "ALife");
+ 	PROF_EVENT("AI: A-Life Update");
+ 	update_switch();
+ 	update_scheduled(false);
+--- a/src/xrGame/map_manager.cpp
++++ b/src/xrGame/map_manager.cpp
+@@ -1,4 +1,5 @@
+ #include "StdAfx.h"
++#include "../xrEngine/FrameStallDiagnostics.h"
+ #include "pch_script.h"
+ #include "map_manager.h"
+ #include "alife_registry_wrappers.h"
+@@ -271,6 +272,7 @@
+ 
+ void CMapManager::Update()
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::MapUpdate, "Map");
+ 	PROF_EVENT("Map: Update");
+ 	if (Device.IsEditorMode())
+ 	{
+--- a/src/xrGame/script_binder.cpp
++++ b/src/xrGame/script_binder.cpp
+@@ -101,7 +101,8 @@
+ 
+ BOOL CScriptBinder::net_Spawn		(CSE_Abstract* DC)
+ {
+-    FrameStallDiag::Scope diagnosticBinderSpawn(FrameStallDiag::Stage::BinderSpawn);
++    FrameStallDiag::DetailScope diagnosticBinderSpawn(FrameStallDiag::Stage::BinderSpawn,
++        smart_cast<CGameObject*>(this) ? smart_cast<CGameObject*>(this)->cName().c_str() : "binder");
+ 	PROF_EVENT("CScriptBinder::net_Spawn")
+ 	CSE_Abstract			*abstract = (CSE_Abstract*)DC;
+ 	CSE_ALifeObject			*object = smart_cast<CSE_ALifeObject*>(abstract);
+--- a/src/xrGame/ui/UIActorMenu.cpp
++++ b/src/xrGame/ui/UIActorMenu.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "UIActorMenu.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "UIActorStateInfo.h"
+ #include "../Actor.h"
+ #include "UIGameSP.h"
+@@ -139,6 +140,7 @@
+ 
+ void CUIActorMenu::SetMenuMode(EMenuMode mode)
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ActorMenuMode);
+ 	SetCurrentItem( nullptr );
+ 	m_hint_wnd->set_text( nullptr );
+ 	
+--- a/src/xrGame/ui/UIActorMenuInventory.cpp
++++ b/src/xrGame/ui/UIActorMenuInventory.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "UIActorMenu.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "../Inventory.h"
+ #include "../InventoryOwner.h"
+ #include "UIInventoryUtilities.h"
+@@ -472,6 +473,7 @@
+ 
+ void CUIActorMenu::InitInventoryContents(CUIDragDropListEx* pBagList)
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::InventoryBuild);
+ 	ClearAllLists				();
+ 	m_pMouseCapturer			= nullptr;
+ 	m_UIPropertiesBox->Hide		();
+--- a/src/xrGame/ui/UIItemInfo.cpp
++++ b/src/xrGame/ui/UIItemInfo.cpp
+@@ -2,6 +2,7 @@
+ #include "pch_script.h"
+ 
+ #include "UIItemInfo.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "../../xrUI/Widgets/UIStatic.h"
+ #include "../../xrUI/UIXmlInit.h"
+ 
+@@ -72,6 +73,7 @@
+ 
+ bool CUIItemInfo::InitItemInfo(LPCSTR xml_name)
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ItemInfoInit);
+ 	CUIXml						uiXml;
+ 	uiXml.Load					(CONFIG_PATH, UI_PATH, xml_name);
+ 
+--- a/src/xrScripts/script_storage.cpp
++++ b/src/xrScripts/script_storage.cpp
+@@ -9,6 +9,7 @@
+ #include "stdafx.h"
+ #include "pch_script.h"
+ #include "script_storage.h"
++#include "../xrEngine/FrameStallDiagnostics.h"
+ #include "script_thread.h"
+ #include <stdarg.h>
+ #include "../xrCore/doug_lea_allocator.h"
+@@ -369,6 +370,7 @@
+ 
+ bool CScriptStorage::do_file(LPCSTR caScriptName, LPCSTR caNameSpaceName)
+ {
++    FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ScriptLoad);
+ 	int				start = lua_gettop(lua());
+ 	IReader* l_tpFileReader = FS.r_open(caScriptName);
+ 
+@@ -377,7 +379,12 @@
+ 		return		(false);
+ 	}
+ 
+-	if (!load_buffer(lua(), static_cast<LPCSTR>(l_tpFileReader->pointer()), (size_t)l_tpFileReader->length(), caNameSpaceName, caNameSpaceName))
++    bool loaded;
++    {
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ScriptCompile);
++        loaded = load_buffer(lua(), static_cast<LPCSTR>(l_tpFileReader->pointer()), (size_t)l_tpFileReader->length(), caNameSpaceName, caNameSpaceName);
++    }
++    if (!loaded)
+ 	{
+ 		lua_settop(lua(), start);
+ 		FS.r_close(l_tpFileReader);
+@@ -388,7 +395,11 @@
+ 	int errFuncId = -1;
+ 
+ 	// because that's the first and the only call of the main chunk - there is no point to compile it
+-	int	l_iErrorCode = lua_pcall(lua(), 0, 0, (-1 == errFuncId) ? 0 : errFuncId);
++    int l_iErrorCode;
++    {
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::ScriptExecute);
++        l_iErrorCode = lua_pcall(lua(), 0, 0, (-1 == errFuncId) ? 0 : errFuncId);
++    }
+ 
+ 	if (l_iErrorCode) 
+ 	{

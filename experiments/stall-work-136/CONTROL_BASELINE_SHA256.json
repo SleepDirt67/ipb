@@ -1,0 +1,11 @@
+{
+  "src/xrEngine/Xr_input.cpp": "9470dd36a7dc443f562dd85a481e6cf93a38ba932cba0d32ef3757cc73f44cec",
+  "src/xrEngine/xr_level_controller.cpp": "5f20028df47b4f6373b05d45f64d58874660e3ed2a89c21e4588041a7370fc4a",
+  "src/xrGame/ActorAnimation.cpp": "d121c7897fd5d6756bf8ecd35350abc50976402e094fc56598d7822deeab04f8",
+  "src/xrGame/ActorInput.cpp": "0310bb6863a3ceb1cd58353d7318b3e1007557d066ea2f2f709ecda6ec5a88e1",
+  "src/xrGame/Actor_Movement.cpp": "a7e2fdcb72af56c0b442583b2eaab85af54782e18f2818be4724ab59c7030e0e",
+  "src/xrGame/EffectorBobbing.cpp": "4456e87407eca8b8f790da43d8646eb2f96d35f303c12a0d5ed049268ac190f2",
+  "src/xrGame/HUDTarget.cpp": "ffdbcf3919781a0f269a44f6e7a4a5140beb5fcbd8fd0a57ff852b473fc1556c",
+  "src/xrGame/HudItem.cpp": "352cfd3f303d6d4e09cfcefb82a7c1ca06c81b8f1fbe242227cbafe0941b2550",
+  "src/xrGame/Weapon.cpp": "91dfc42b0139ca84493c87c02ef14d7eac9410a3a480fe98367a20f8e53d907e"
+}

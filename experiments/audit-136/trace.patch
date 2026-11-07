@@ -1,0 +1,392 @@
+--- a/src/Layers/xrRender/ModelPool.cpp
++++ b/src/Layers/xrRender/ModelPool.cpp
+@@ -10,6 +10,34 @@
+ #	include "FLOD.h"
+ #	include "FTreeVisual.h"
+ #endif
++
++namespace
++{
++    thread_local unsigned modelLoadDepth = 0;
++    struct ModelLoadDiagnostic
++    {
++        bool active;
++        unsigned frame = 0;
++        std::chrono::steady_clock::time_point start;
++        ModelLoadDiagnostic() : active(FrameStallDiag::Enabled())
++        {
++            if (active && modelLoadDepth++ == 0)
++            {
++                frame = FrameStallDiag::CurrentFrame();
++                start = std::chrono::steady_clock::now();
++            }
++        }
++        ~ModelLoadDiagnostic()
++        {
++            if (!active) return;
++            if (--modelLoadDepth == 0 && frame)
++            {
++                const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
++                FrameStallDiag::Record(FrameStallDiag::Stage::ModelLoadOuter, frame, us > 0 ? static_cast<unsigned long long>(us) : 0);
++            }
++        }
++    };
++}
+ 
+ #include "FVisual.h"
+ #include "FProgressive.h"
+@@ -90,6 +118,7 @@
+ 
+ dxRender_Visual*	CModelPool::Instance_Load		(const char* N, BOOL allow_register)
+ {
++    ModelLoadDiagnostic diagnosticOuter;
+     FrameStallDiag::Scope diagnosticLoad(FrameStallDiag::Stage::ModelLoad);
+ 	dxRender_Visual	*V;
+ 	string_path		fn;
+@@ -131,6 +160,7 @@
+ 
+ dxRender_Visual* CModelPool::Instance_Load(const char* name, IReader* data, BOOL allow_register)
+ {
++    ModelLoadDiagnostic diagnosticOuter;
+     FrameStallDiag::Scope diagnosticLoad(FrameStallDiag::Stage::ModelLoad);
+ 	dxRender_Visual	*V;
+ 	
+--- a/src/xrEngine/FrameStallDiagnostics.h
++++ b/src/xrEngine/FrameStallDiagnostics.h
+@@ -16,12 +16,16 @@
+         ScriptLoad, ScriptCompile, ScriptExecute, InputFrame,
+         ALifeUpdate, MapUpdate, CallbackMain, CallbackMT,
+         ActorMenuMode, InventoryBuild, ItemInfoInit, TextureLoad,
++        SpawnIni, SpawnReload, SpawnReinit, InventoryClear, CellCreate,
++        CellXmlInit, InventorySetItem, InventorySort, QuickSlots,
++        ALifeSwitch, ALifeScheduled, ALifeOnline, ALifeOffline, ModelLoadOuter,
+         Count
+     };
+ 
+     ENGINE_API bool Enabled();
+     ENGINE_API unsigned CurrentFrame();
+     ENGINE_API void BeginFrame(unsigned frame);
++    ENGINE_API void MarkLoadingEvent();
+     ENGINE_API void Record(Stage stage, unsigned frame, unsigned long long us);
+     ENGINE_API void FinishFrame(unsigned frame, double totalMs);
+     ENGINE_API void RecordScheduled(bool rt, unsigned frame, unsigned long long us, const char* name);
+@@ -36,7 +40,7 @@
+         Stage stage_;
+         bool active_;
+         unsigned frame_;
+-        char name_[96] = {};
++        char name_[96];
+         std::chrono::steady_clock::time_point start_;
+         unsigned long long cycles_;
+     public:
+@@ -45,7 +49,11 @@
+               start_(active_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}),
+               cycles_(active_ ? ThreadCycles() : 0)
+         {
+-            if (active_ && name) strncpy_s(name_, sizeof(name_), name, _TRUNCATE);
++            if (active_)
++            {
++                name_[0] = 0;
++                if (name) strncpy_s(name_, sizeof(name_), name, _TRUNCATE);
++            }
+         }
+         ~DetailScope()
+         {
+--- a/src/xrEngine/device.cpp
++++ b/src/xrEngine/device.cpp
+@@ -182,7 +182,8 @@
+             // Set IXRAY_TRACE_ALL_FRAMES=0 for a performance-only comparison.
+             static constexpr size_t capacity = 65536;
+             std::vector<TraceRow> rows;
+-            unsigned dropped = 0;
++            unsigned dropped = 0, loadingCalls = 0;
++            unsigned long long originUncertainty = 0;
+             unsigned long long frequency = 0, utc = 0, origin = 0;
+             char path[1024] = {};
+             bool initialized = false, enabled = false;
+@@ -193,15 +194,17 @@
+                 char flag[2] = {};
+                 enabled = !(GetEnvironmentVariableA("IXRAY_TRACE_ALL_FRAMES", flag, sizeof(flag)) == 1 && flag[0] == '0');
+                 if (!enabled) return;
+-                LARGE_INTEGER q, f;
++                LARGE_INTEGER q, qAfter, f;
+                 QueryPerformanceFrequency(&f);
+                 QueryPerformanceCounter(&q);
+                 FILETIME ft;
+                 using PreciseTime = void (WINAPI*)(LPFILETIME);
+                 const auto preciseTime = reinterpret_cast<PreciseTime>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetSystemTimePreciseAsFileTime"));
+                 if (preciseTime) preciseTime(&ft); else GetSystemTimeAsFileTime(&ft);
++                QueryPerformanceCounter(&qAfter);
+                 frequency = f.QuadPart;
+-                origin = q.QuadPart;
++                origin = q.QuadPart + (qAfter.QuadPart - q.QuadPart) / 2;
++                originUncertainty = (qAfter.QuadPart - q.QuadPart + 1) / 2;
+                 utc = (static_cast<unsigned long long>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+                 string_path logs;
+                 FS.update_path(logs, "$logs$", "");
+@@ -213,8 +216,8 @@
+                 if (!enabled || rows.empty()) return;
+                 FILE* output = nullptr;
+                 if (fopen_s(&output, path, "wb") != 0 || !output) return;
+-                fprintf(output, "#version=3,qpc_frequency=%llu,qpc_origin=%llu,utc_filetime=%llu,dropped=%u,capacity=%zu\n",
+-                    frequency, origin, utc, dropped, capacity);
++                fprintf(output, "#version=4,qpc_frequency=%llu,qpc_origin=%llu,utc_filetime=%llu,dropped=%u,capacity=%zu,qpc_origin_uncertainty_ticks=%llu,loading_calls=%u,row_bytes=%zu\n",
++                    frequency, origin, utc, dropped, capacity, originUncertainty, loadingCalls, sizeof(TraceRow));
+                 fprintf(output, "frame,qpc_start,qpc_end,main_cycles,total_ms");
+                 for (unsigned i = 0; i < kStages; ++i) fprintf(output, ",s%u_us,s%u_cycles,s%u_n", i, i, i);
+                 fprintf(output, ",rt_name,rt_us,nonrt_name,nonrt_us,binder_name,binder_us,parallel_name,parallel_us,main_callback_name,main_callback_us,mt_callback_name,mt_callback_us\n");
+@@ -287,6 +290,8 @@
+         activeFrame.store(frame, std::memory_order_release);
+     }
+ 
++    void MarkLoadingEvent() { if (Enabled()) ++traceBuffer.loadingCalls; }
++
+     void Record(Stage stage, unsigned frame, unsigned long long us)
+     {
+         if (!Enabled() || frame == 0) return;
+@@ -336,7 +341,7 @@
+         if (!Enabled() || !frame) return;
+         Sample& s = samples[frame % kHistory];
+         if (s.frame.load(std::memory_order_acquire) != frame) return;
+-        const unsigned lane = stage == Stage::BinderSpawn ? 0 : (stage == Stage::ParallelTasks || stage == Stage::ALifeUpdate || stage == Stage::MapUpdate) ? 1 : stage == Stage::CallbackMain ? 2 : 3;
++        const unsigned lane = stage == Stage::BinderSpawn ? 0 : (stage == Stage::ParallelTasks || stage == Stage::ALifeUpdate || stage == Stage::MapUpdate || stage == Stage::LuaGC) ? 1 : stage == Stage::CallbackMain ? 2 : 3;
+         WorstSchedule& worst = s.detailWorst[lane];
+         if (us > worst.us)
+         {
+@@ -373,7 +378,13 @@
+             }
+             else ++traceBuffer.dropped;
+         }
+-        if (totalMs < 16.0) return;
++        // Full CSV already captures these frames. Formatting/disk logging is a
++        // separate opt-in so it does not create unmeasured gaps in RUN_TRACE.
++        static const bool humanLog = []() {
++            char flag[2] = {};
++            return GetEnvironmentVariableA("IXRAY_TRACE_HUMAN_LOG", flag, sizeof(flag)) == 1 && flag[0] == '1';
++        }();
++        if (!humanLog || totalMs < 16.0) return;
+         const auto now = std::chrono::steady_clock::now();
+         static auto lastReport = now - std::chrono::seconds(1);
+         if (now - lastReport < std::chrono::milliseconds(250)) return;
+@@ -468,6 +479,7 @@
+ 
+ 	if (!g_loading_events.empty())
+ 	{
++        FrameStallDiag::MarkLoadingEvent();
+ 		{
+ 			PROF_EVENT("Loading...");
+ 			if (g_loading_events.front()())
+--- a/src/xrEngine/pure.cpp
++++ b/src/xrEngine/pure.cpp
+@@ -15,8 +15,13 @@
+ void rp_Frame(void* object)
+ {
+     auto* callback = static_cast<pureFrame*>(object);
++    if (!FrameStallDiag::Enabled())
++    {
++        callback->OnFrame();
++        return;
++    }
+     const auto stage = FrameStallDiag::IsMainThread() ? FrameStallDiag::Stage::CallbackMain : FrameStallDiag::Stage::CallbackMT;
+-    FrameStallDiag::DetailScope detail(stage, FrameStallDiag::Enabled() ? typeid(*callback).name() : nullptr);
++    FrameStallDiag::DetailScope detail(stage, typeid(*callback).name());
+     callback->OnFrame();
+ }
+ DECLARE_RP(Render);
+--- a/src/xrGame/GameObject.cpp
++++ b/src/xrGame/GameObject.cpp
+@@ -291,7 +291,8 @@
+ #pragma warning(push)
+ #pragma warning(disable:4238)
+ 		IReader MemReader((void*) O->m_ini_string.c_str(), O->m_ini_string.size());
+-		m_ini_file = new CInifile(&MemReader, FS.get_path("$game_config$")->m_Path);
++        FrameStallDiag::DetailScope diagnosticIni(FrameStallDiag::Stage::SpawnIni);
++        m_ini_file = new CInifile(&MemReader, FS.get_path("$game_config$")->m_Path);
+ #pragma warning(pop)
+ 	}
+ 
+@@ -324,11 +325,16 @@
+ 			SpatialComponent->spatial.type = (SpatialComponent->spatial.type | STYPE_VISIBLEFORAI) ^ STYPE_VISIBLEFORAI;
+ 	}
+ 
+-	reload(*cNameSect());
+-	CScriptBinder::reload(*cNameSect());
+-	
+-	reinit();
+-	CScriptBinder::reinit();
++    {
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::SpawnReload);
++        reload(*cNameSect());
++        CScriptBinder::reload(*cNameSect());
++    }
++    {
++        FrameStallDiag::DetailScope detail(FrameStallDiag::Stage::SpawnReinit);
++        reinit();
++        CScriptBinder::reinit();
++    }
+ 
+ #ifdef DEBUG
+ 	if(ph_dbg_draw_mask1.test(ph_m1_DbgTrackObject)&&_stricmp(PH_DBG_ObjectTrackName(),*cName())==0)
+--- a/src/xrGame/HUDManager.cpp
++++ b/src/xrGame/HUDManager.cpp
+@@ -66,7 +66,7 @@
+     }
+     // Separate lock acquisition from work under the lock, retaining RAII unlock.
+     const auto lockStart = FrameStallDiag::Enabled() ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+-    const unsigned frame = FrameStallDiag::CurrentFrame();
++    const unsigned frame = FrameStallDiag::Enabled() ? FrameStallDiag::CurrentFrame() : 0;
+     const auto cycles = FrameStallDiag::Enabled() ? FrameStallDiag::ThreadCycles() : 0;
+     xrCriticalSectionGuard guard(&ui_lock);
+     if (FrameStallDiag::Enabled())
+--- a/src/xrGame/Level.cpp
++++ b/src/xrGame/Level.cpp
+@@ -750,7 +750,7 @@
+ 		}catch (...) {}
+ 	}
+ 	PROF_EVENT("CLevel::script_gc");
+-    FrameStallDiag::Scope diagnosticGC(FrameStallDiag::Stage::LuaGC);
++    FrameStallDiag::DetailScope diagnosticGC(FrameStallDiag::Stage::LuaGC, "LuaGC");
+ 	try{lua_gc	(ai().script_engine().lua(), LUA_GCSTEP, psLUA_GCSTEP);}catch (...) {}
+ }
+ 
+--- a/src/xrGame/alife_switch_manager.cpp
++++ b/src/xrGame/alife_switch_manager.cpp
+@@ -1,4 +1,5 @@
+ ////////////////////////////////////////////////////////////////////////////
++#include "../xrEngine/FrameStallDiagnostics.h"
+ //	Module 		: alife_switch_manager.cpp
+ //	Created 	: 25.12.2002
+ //  Modified 	: 12.05.2004
+@@ -48,6 +49,7 @@
+ 
+ void CALifeSwitchManager::add_online(CSE_ALifeDynamicObject *object, bool update_registries)
+ {
++    FrameStallDiag::DetailScope diagnosticALifeOnline(FrameStallDiag::Stage::ALifeOnline);
+ 	PROF_EVENT("ALife/add_online")
+ 	VERIFY							((ai().game_graph().vertex(object->m_tGraphID)->level_id() == graph().level().level_id()));
+ 
+@@ -73,6 +75,7 @@
+ 
+ void CALifeSwitchManager::remove_online(CSE_ALifeDynamicObject *object, bool update_registries)
+ {
++    FrameStallDiag::DetailScope diagnosticALifeOffline(FrameStallDiag::Stage::ALifeOffline);
+ 	PROF_EVENT("ALife/remove_online");
+ 	object->m_bOnline			= false;
+ 	
+--- a/src/xrGame/alife_update_manager.cpp
++++ b/src/xrGame/alife_update_manager.cpp
+@@ -92,6 +92,7 @@
+ 
+ void CALifeUpdateManager::update_switch()
+ {
++    FrameStallDiag::DetailScope diagnosticALifeSwitch(FrameStallDiag::Stage::ALifeSwitch);
+ 	init_ef_storage();
+ 
+ 	PROF_EVENT("ALife/switch");
+@@ -100,6 +101,7 @@
+ 
+ void CALifeUpdateManager::update_scheduled(bool init_ef)
+ {
++    FrameStallDiag::DetailScope diagnosticALifeScheduled(FrameStallDiag::Stage::ALifeScheduled);
+ 	if (init_ef)
+ 		init_ef_storage();
+ 
+--- a/src/xrGame/script_binder.cpp
++++ b/src/xrGame/script_binder.cpp
+@@ -101,8 +101,9 @@
+ 
+ BOOL CScriptBinder::net_Spawn		(CSE_Abstract* DC)
+ {
++    CGameObject* diagnosticObject = FrameStallDiag::Enabled() ? smart_cast<CGameObject*>(this) : nullptr;
+     FrameStallDiag::DetailScope diagnosticBinderSpawn(FrameStallDiag::Stage::BinderSpawn,
+-        smart_cast<CGameObject*>(this) ? smart_cast<CGameObject*>(this)->cName().c_str() : "binder");
++        diagnosticObject ? diagnosticObject->cName().c_str() : nullptr);
+ 	PROF_EVENT("CScriptBinder::net_Spawn")
+ 	CSE_Abstract			*abstract = (CSE_Abstract*)DC;
+ 	CSE_ALifeObject			*object = smart_cast<CSE_ALifeObject*>(abstract);
+--- a/src/xrGame/ui/UIActorMenu.cpp
++++ b/src/xrGame/ui/UIActorMenu.cpp
+@@ -917,6 +917,7 @@
+ // -------------------------------------------------------------------=
+ void CUIActorMenu::ClearAllLists()
+ {
++    FrameStallDiag::DetailScope diagnosticInventoryClear(FrameStallDiag::Stage::InventoryClear);
+ 	m_pInventoryBagList->ClearAll(true);
+ 	m_pInventoryBeltList->ClearAll(true);
+ 
+--- a/src/xrGame/ui/UIActorMenuInventory.cpp
++++ b/src/xrGame/ui/UIActorMenuInventory.cpp
+@@ -504,7 +504,10 @@
+ 
+ 	TIItemContainer				ruck_list;
+ 	ruck_list					= m_pActorInvOwner->inventory().m_ruck;
+-	std::sort					( ruck_list.begin(), ruck_list.end(), InventoryUtilities::GreaterRoomInRuck );
++    {
++        FrameStallDiag::DetailScope diagnosticSort(FrameStallDiag::Stage::InventorySort);
++        std::sort(ruck_list.begin(), ruck_list.end(), InventoryUtilities::GreaterRoomInRuck);
++    }
+ 
+ 	curr_list					= pBagList;
+ 
+--- a/src/xrGame/ui/UICellItem.cpp
++++ b/src/xrGame/ui/UICellItem.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "UICellItem.h"
+ #include "../../xrUI/UICursor.h"
+ #include "../inventory_item.h"
+@@ -49,6 +50,7 @@
+ 
+ void CUICellItem::init()
+ {
++    FrameStallDiag::DetailScope diagnosticCellXmlInit(FrameStallDiag::Stage::CellXmlInit);
+ 	static CUIXml uiXml;
+ 	static bool is_xml_ready = false;
+ 
+--- a/src/xrGame/ui/UICellItemFactory.cpp
++++ b/src/xrGame/ui/UICellItemFactory.cpp
+@@ -1,9 +1,11 @@
+ #include "stdafx.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "UICellItemFactory.h"
+ #include "UICellCustomItems.h"
+ 
+ CUICellItem* create_cell_item(CInventoryItem* itm)
+ {
++    FrameStallDiag::DetailScope diagnosticCellCreate(FrameStallDiag::Stage::CellCreate);
+ 	VERIFY(itm);
+ 	CUICellItem* cell_item = nullptr;
+ 
+--- a/src/xrGame/ui/UIDragDropListEx.cpp
++++ b/src/xrGame/ui/UIDragDropListEx.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "UIDragDropListEx.h"
+ #include "../../xrUI/Widgets/UIScrollBar.h"
+ #include "object_broker.h"
+@@ -445,6 +446,7 @@
+ 
+ void CUIDragDropListEx::SetItem(CUICellItem* itm) //auto
+ {
++    FrameStallDiag::DetailScope diagnosticInventorySetItem(FrameStallDiag::Stage::InventorySetItem);
+ 	if(m_container->AddSimilar(itm)){
+ 		return;
+ 	}
+--- a/src/xrGame/ui/UIDragDropReferenceList.cpp
++++ b/src/xrGame/ui/UIDragDropReferenceList.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include "../../xrEngine/FrameStallDiagnostics.h"
+ #include "UIDragDropReferenceList.h"
+ #include "UICellItem.h"
+ #include "UICellItemFactory.h"
+@@ -117,6 +118,7 @@
+ 
+ void CUIDragDropReferenceList::ReloadReferences(CInventoryOwner* pActor)
+ {
++    FrameStallDiag::DetailScope diagnosticQuickSlots(FrameStallDiag::Stage::QuickSlots);
+ 	if (!pActor)
+ 		return;
+ 

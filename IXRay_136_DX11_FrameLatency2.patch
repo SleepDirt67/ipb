@@ -1,0 +1,31 @@
+diff --git a/src/Layers/xrRender/dxRenderDeviceRender.cpp b/src/Layers/xrRender/dxRenderDeviceRender.cpp
+--- a/src/Layers/xrRender/dxRenderDeviceRender.cpp
++++ b/src/Layers/xrRender/dxRenderDeviceRender.cpp
+@@ -207,10 +207,27 @@
+ 
+ void dxRenderDeviceRender::Create(SDL_Window* window, u32 &dwWidth, u32 &dwHeight, float &fWidth_2, float &fHeight_2, bool move_window)
+ {
+ #ifndef _EDITOR
+ 	CImGuiManager::Instance().InitHardware();
++#ifdef USE_DX11
++	// Restrict CPU->GPU queued frames without changing swapchain model or VSync.
++	IDXGIDevice1* dxgiLatencyDevice = nullptr;
++	if (RDevice && SUCCEEDED(RDevice->QueryInterface(IID_PPV_ARGS(&dxgiLatencyDevice))) && dxgiLatencyDevice)
++	{
++		const HRESULT latencyResult = dxgiLatencyDevice->SetMaximumFrameLatency(2);
++		UINT actualMaxLatency = 0;
++		if (SUCCEEDED(latencyResult) && SUCCEEDED(dxgiLatencyDevice->GetMaximumFrameLatency(&actualMaxLatency)))
++			Msg("* DX11 maximum queued frames: %u (combined experiment)", actualMaxLatency);
++		else
++			Msg("! DX11 frame latency unchanged: SetMaximumFrameLatency 0x%08X", unsigned(latencyResult));
++		dxgiLatencyDevice->Release();
++	}
++	else
++		Msg("! DX11 frame latency unchanged: IDXGIDevice1 unavailable");
++#endif
++
+ 
+ 	dwWidth = Device.GetSwapchainWidth();
+ 	dwHeight = Device.GetSwapchainHeight();
+ 
+ 	fWidth_2 = Device.HalfTargetWidth;

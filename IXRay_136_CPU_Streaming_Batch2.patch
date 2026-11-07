@@ -1,0 +1,111 @@
+diff --git a/src/xrEngine/AI/game_graph.cpp b/src/xrEngine/AI/game_graph.cpp
+--- a/src/xrEngine/AI/game_graph.cpp
++++ b/src/xrEngine/AI/game_graph.cpp
+@@ -46,14 +46,10 @@
+ 			return true;
+ 		}
+ 
+-		if (!VertexTypes||VertexTypes->empty()) 
+-		{
+-		#ifndef MASTER_GOLD
+-			Msg("! warning : empty vertex types");
+-		#endif // MASTER_GOLD
+-
++		// Empty terrain filters mean every accessible vertex is eligible.
++		// Do not log this on each pathfinding neighbour visit.
++		if (!VertexTypes || VertexTypes->empty())
+ 			return true;
+-		}
+ 
+ 		xr_vector<GameGraph::STerrainPlace>::const_iterator I = VertexTypes->begin();
+ 		xr_vector<GameGraph::STerrainPlace>::const_iterator E = VertexTypes->end();
+@@ -109,12 +105,14 @@
+ 		if (CurrentNodeID == ToID)
+ 		{
+ 			u32 NextNode = ToID;
++			// Build backwards and reverse once instead of shifting the path for each node.
+ 			while (NextNode != FromID)
+ 			{
+-				OutPath.insert( OutPath.begin(),NextNode);
++				OutPath.push_back(NextNode);
+ 				NextNode = TempCameFrom[NextNode];
+ 			}
+-			OutPath.insert( OutPath.begin(),NextNode);
++			OutPath.push_back(NextNode);
++			std::reverse(OutPath.begin(), OutPath.end());
+ 			return true;
+ 		}
+ 		
+diff --git a/src/Layers/xrRender/DetailManager_CACHE.cpp b/src/Layers/xrRender/DetailManager_CACHE.cpp
+--- a/src/Layers/xrRender/DetailManager_CACHE.cpp
++++ b/src/Layers/xrRender/DetailManager_CACHE.cpp
+@@ -212,6 +212,22 @@
+ 			int limit = dm_max_decompress;
+ 			if (cache_task.size() == dm_cache_size) { limit = dm_cache_size; bFullUnpack = TRUE; }
+ 
++			// Reuse distance storage across updates; each pending slot is measured once.
++			// Stable erase below keeps exact original tie-breaking and task order.
++			static thread_local xr_vector<float> task_distances;
++			task_distances.clear();
++			if (!bFullUnpack)
++			{
++				task_distances.reserve(cache_task.size());
++				for (Slot* pending : cache_task)
++				{
++					VERIFY(stPending == pending->type);
++					Fvector center;
++					pending->vis.box.getcenter(center);
++					task_distances.push_back(view.distance_to_sqr(center));
++				}
++			}
++
+ 			for (int iteration = 0; cache_task.size() && (iteration < limit); iteration++) {
+ 				u32		best_id = 0;
+ 				float	best_dist = flt_max;
+@@ -222,14 +238,8 @@
+ 				{
+ 					for (u32 entry = 0; entry < cache_task.size(); entry++)
+ 					{
+-						// Gain access to data
+-						Slot* S = cache_task[entry];
+-						VERIFY(stPending == S->type);
+-
+-						// Estimate
+-						Fvector		C;
+-						S->vis.box.getcenter(C);
+-						float		D = view.distance_to_sqr(C);
++						// Distances were computed once for the current camera position.
++						float D = task_distances[entry];
+ 
+ 						// Select
+ 						if (D < best_dist)
+@@ -243,6 +253,8 @@
+ 				// Decompress and remove task
+ 				cache_Decompress(cache_task[best_id]);
+ 				cache_task.erase(cache_task.begin() + best_id);
++				if (!bFullUnpack)
++					task_distances.erase(task_distances.begin() + best_id);
+ 			}
+ 		}
+ 	}
+diff --git a/src/Layers/xrRender/DetailManager.cpp b/src/Layers/xrRender/DetailManager.cpp
+--- a/src/Layers/xrRender/DetailManager.cpp
++++ b/src/Layers/xrRender/DetailManager.cpp
+@@ -267,6 +267,8 @@
+ 				float R = D.bv_sphere.R;
+ 				float Rq_drcp = R*R*dist_sq_rcp;	// reordered expression for 'ssa' calc
+ 
++				// Cache the output bucket address while iterating visible grass.
++				auto& detail_buckets = D.m_items;
+ 				for (auto& SItem : sp.items)
+ 				{
+ 					CDetail::SlotItem& Item  = *SItem;
+@@ -279,7 +281,7 @@
+ 					u32 vis_id = 0;
+ 					if (ssa > r_ssaCHEAP)
+ 						vis_id = Item.vis_ID;
+-					D.m_items[vis_id][calc_key].push_back(SItem);
++					detail_buckets[vis_id][calc_key].push_back(SItem);
+ 				}
+ 			}
+ 		}

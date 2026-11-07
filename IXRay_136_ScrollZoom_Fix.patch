@@ -1,0 +1,16 @@
+diff --git a/src/xrGame/ActorInput.cpp b/src/xrGame/ActorInput.cpp
+--- a/src/xrGame/ActorInput.cpp
++++ b/src/xrGame/ActorInput.cpp
+@@ -247,10 +247,11 @@
+ 	{
+ 		g_player_hud->tune({ 0.f,0.f,float(direction) });
+ 		return;
+ 	}
+ 
+-	if(inventory().Action( (direction>0)? (u16)kWPN_ZOOM_DEC:(u16)kWPN_ZOOM_INC , CMD_START)) return;
++	// Mouse-wheel forward should zoom in, backward should zoom out.
++	if(inventory().Action( (direction>0)? (u16)kWPN_ZOOM_INC:(u16)kWPN_ZOOM_DEC , CMD_START)) return;
+ 
+ 
+ 	if (direction>0)
+ 		OnNextWeaponSlot				();

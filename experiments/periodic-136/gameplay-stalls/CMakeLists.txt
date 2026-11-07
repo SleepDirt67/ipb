@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(IXRayGameplayStallChecks LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+add_executable(ixray_gameplay_stalls fixture.cpp)
+target_include_directories(ixray_gameplay_stalls PRIVATE "${GENERATED}" "${ENGINE}/sdk/include/lua")
+target_link_libraries(ixray_gameplay_stalls PRIVATE "${LUA_LIB}")

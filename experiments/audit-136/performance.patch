@@ -1,0 +1,168 @@
+--- a/src/xrCore/FormatParsers/XML/xrXMLParser.cpp
++++ b/src/xrCore/FormatParsers/XML/xrXMLParser.cpp
+@@ -178,6 +178,16 @@
+ XML_NODE* CXml::NavigateToNode(XML_NODE* start_node, LPCSTR  path, int node_index)
+ {
+ 	R_ASSERT3					(start_node && path, "NavigateToNode failed in XML file ",m_xml_file_name);
++    VERIFY(xr_strlen(path) < 200);
++    // Most UI attribute reads use one literal node name. No path tokenization
++    // or stack-buffer copy is needed for that case; tree lookup is unchanged.
++    if (*path && !strchr(path, ':'))
++    {
++        XML_NODE* node = start_node->FirstChildElement(path);
++        for (int i = 0; i < node_index && node; ++i)
++            node = node->NextSiblingElement(path);
++        return node;
++    }
+ 	XML_NODE*	node			= nullptr;
+ 	XML_NODE*	node_parent		= nullptr;
+ 	string_path					buf_str;
+--- a/src/xrCore/Xr_ini.cpp
++++ b/src/xrCore/Xr_ini.cpp
+@@ -1,6 +1,7 @@
+ #include "stdafx.h"
+ 
+ #include <regex>
++#include <iterator>
+ 
+ #include "FS_internal.h"
+ 
+@@ -993,14 +994,25 @@
+ 		EvaluateSection(Name, PreviousEvaluations);
+ 	}
+ 
+-	// Insert all finalized sections into final container
+-	for (auto &[Name, Section] : FinalData)
+-	{
+-		Sect* NewSect = new Sect(Section);
+-
+-		RootIt I = std::lower_bound(DATA.begin(), DATA.end(), Name.c_str(), sect_pred);
+-		DATA.insert(I, NewSect);
+-	}
++    // Build the sorted suffix once instead of shifting DATA for every section.
++    // Keep the legacy equal-name rule: newly loaded sections precede old ones.
++    Root loaded;
++    loaded.reserve(FinalData.size());
++    for (auto& [Name, Section] : FinalData)
++        loaded.push_back(new Sect(Section));
++    const auto byName = [](const Sect* a, const Sect* b)
++    { return xr_strcmp(*a->Name, *b->Name) < 0; };
++    std::sort(loaded.begin(), loaded.end(), byName);
++    if (DATA.empty())
++        DATA.swap(loaded);
++    else
++    {
++        Root merged;
++        merged.reserve(loaded.size() + DATA.size());
++        std::merge(loaded.begin(), loaded.end(), DATA.begin(), DATA.end(),
++            std::back_inserter(merged), byName);
++        DATA.swap(merged);
++    }
+ 
+ 	// Clean modifiers of parameters' lists
+ 	OverrideModifyListData.clear();
+--- a/src/xrGame/ui/UICellItem.cpp
++++ b/src/xrGame/ui/UICellItem.cpp
+@@ -396,6 +396,16 @@
+ 	return				itm;
+ }
+ 
++CUICellItem* CUICellItem::PopChildForDestroy()
++{
++    CUICellItem* item = m_childs.back();
++    m_childs.pop_back();
++    std::swap(item->m_pData, m_pData);
++    R_ASSERT(item->ChildsCount() == 0);
++    item->SetOwnerList(nullptr);
++    return item;
++}
++
+ bool CUICellItem::HasChild(CUICellItem* item)
+ {
+ 	return (m_childs.end() != std::find(m_childs.begin(), m_childs.end(), item) );
+--- a/src/xrGame/ui/UICellItem.h
++++ b/src/xrGame/ui/UICellItem.h
+@@ -58,6 +58,7 @@
+ 				u32			ChildsCount				();
+ 				void		 PushChild				(CUICellItem*);
+ 				CUICellItem* PopChild				(CUICellItem*);
++                CUICellItem* PopChildForDestroy();
+ 				CUICellItem* Child					(u32 idx)				{return m_childs[idx];};
+ 				bool		HasChild				(CUICellItem* item);
+ 	virtual		bool		EqualTo					(CUICellItem* itm);
+--- a/src/xrGame/ui/UIDragDropListEx.cpp
++++ b/src/xrGame/ui/UIDragDropListEx.cpp
+@@ -313,14 +313,20 @@
+ void CUIDragDropListEx::Compact()
+ {
+ 	xrCriticalSectionGuard guard(m_container->csUi);
+-	CUIWindow::WINDOW_LIST& wl = m_container->GetChildWndList();
+-	ClearAll(false);
+-
+-	for (CUIWindow* child : wl)
+-	{
+-		CUICellItem* itm = child->ui_cast_cell_item();
+-		SetItem(itm);
+-	}
++    // ClearAll(false) detaches roots and pops grouped children. A reference
++    // to GetChildWndList() becomes empty, and child pointers would be lost.
++    // Snapshot every cell pointer before clearing; keep the same root order.
++    xr_vector<CUICellItem*> cells;
++    for (CUIWindow* window : m_container->GetChildWndList())
++    {
++        CUICellItem* item = window->ui_cast_cell_item();
++        cells.push_back(item);
++        for (u32 i = 0; i < item->ChildsCount(); ++i)
++            cells.push_back(item->Child(i));
++    }
++    ClearAll(false);
++    for (CUICellItem* item : cells)
++        SetItem(item);
+ }
+ 
+ void CUIDragDropListEx::Draw()
+@@ -925,18 +931,15 @@
+ 
+ 	xrCriticalSectionGuard guard(csUi);
+ 
+-	auto it = m_ChildWndList.rbegin();
+-
+-	while (it != m_ChildWndList.rend())
+-	{
+-		CUIWindow* w = *it;
+-		CUICellItem* wc = w != nullptr ? w->ui_cast_cell_item() : nullptr;
+-		VERIFY(!wc->IsAutoDelete());
+-		
+-		if (!wc) {
+-			++it;
+-			continue;
+-		}
++    // DetachChild erases from a vector. Do not retain an invalidated reverse
++    // iterator across that erase; reverse indices keep the same visit order.
++    size_t remaining = m_ChildWndList.size();
++    while (remaining != 0)
++    {
++        CUIWindow* w = m_ChildWndList[--remaining];
++        CUICellItem* wc = w != nullptr ? w->ui_cast_cell_item() : nullptr;
++        if (!wc) continue;
++        VERIFY(!wc->IsAutoDelete());
+ 
+ 		bool IsIgnored = false;
+ 		if (DeepSearch) {
+@@ -956,7 +959,7 @@
+ 
+ 			while (wc->ChildsCount())
+ 			{
+-				CUICellItem* ci = wc->PopChild(nullptr);
++                CUICellItem* ci = bDestroy ? wc->PopChildForDestroy() : wc->PopChild(nullptr);
+ 				R_ASSERT(ci->ChildsCount() == 0);
+ 
+ 				if (bDestroy)
+@@ -978,7 +981,6 @@
+ 			}
+ 		}
+ 
+-		++it;
+ 	}
+ }
+ 

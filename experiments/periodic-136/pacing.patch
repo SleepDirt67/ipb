@@ -1,0 +1,182 @@
+--- a/src/xrEngine/device.cpp
++++ b/src/xrEngine/device.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "FrameStallDiagnostics.h"
++#include "PacingDiagnostics.h"
+ #include <atomic>
+ #include <cstdio>
+ #include <vector>
+@@ -458,13 +459,18 @@
+ 
+ 
+ 
++    PacingDiag::SetFrame(dwFrame + 1,
++        (b_is_Active ? 1u : 0u) | (main_menu_active ? 2u : 0u) |
++        (!g_loading_events.empty() ? 4u : 0u) | (Paused() ? 8u : 0u) |
++        (g_pGameLevel ? 16u : 0u), dwTimeGlobal);
++    PacingDiag::Span pacingIdle(PacingDiag::Kind::OnIdle);
+ 	PROF_FRAME("Main Thread");
+     FrameStallDiag::BeginFrame(dwFrame + 1);
+     const auto frameStallStart = FrameStallDiag::Enabled()
+         ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+ 	// Main thread is already named once during engine startup.
+ 
+-	Device.BeginRender();
++    { PacingDiag::Span pacingBegin(PacingDiag::Kind::BeginRender); Device.BeginRender(); }
+ 	const bool Minimized = SDL_GetWindowFlags(g_AppInfo.Window) & SDL_WINDOW_MINIMIZED;
+ 	const bool Focus = psDeviceFlags.test(rsFullscreen) || (!Minimized && !main_menu_active && !CImGuiManager::Instance().IsCapturingInputs());
+ 
+@@ -582,6 +588,7 @@
+ 
+ 	if (!g_dedicated_server)
+ 	{
++        PacingDiag::Span pacingRender(PacingDiag::Kind::Render);
+         FrameStallDiag::Scope diag(FrameStallDiag::Stage::RenderMain);
+ 		Statistic->RenderTOTAL_Real.FrameStart();
+ 		Statistic->RenderTOTAL_Real.Begin();
+@@ -589,7 +596,7 @@
+ 		{
+ 			if (Begin())
+ 			{
+-				seqRender.Process(rp_Render);
++                { PacingDiag::Span pacingScene(PacingDiag::Kind::SceneRender); seqRender.Process(rp_Render); }
+ 				if (psDeviceFlags.test(rsCameraPos) || psDeviceFlags.test(rsStatistic) || Statistic->errors.size())
+ 					Statistic->Show();
+ 
+@@ -601,6 +608,7 @@
+ 		Statistic->RenderTOTAL.accum = Statistic->RenderTOTAL_Real.accum;
+ 	}
+     {
++        PacingDiag::Span pacingWait(PacingDiag::Kind::WaitWorkers);
+         FrameStallDiag::Scope diag(FrameStallDiag::Stage::WaitGameThread);
+         secondary_tasks.wait();
+     }
+@@ -627,6 +635,8 @@
+ 	while (!quiting)
+ 	{
+ 		SDL_Event event;
++        {
++        PacingDiag::Span pacingPump(PacingDiag::Kind::Pump, true);
+ 		while (SDL_PollEvent(&event))
+ 		{
+ 			if (!on_event(event))
+@@ -636,11 +646,13 @@
+ 			}
+ 		}
+ 
++        }
+ 		if (!quiting)
+ 		{
+ 		on_idle();
+ 	}
+ 	}
++    PacingDiag::Flush();
+ }
+ 
+ void CRenderDevice::Run()
+--- a/src/xrEngine/EngineThreading.cpp
++++ b/src/xrEngine/EngineThreading.cpp
+@@ -1,6 +1,7 @@
+ #include "stdafx.h"
+ #include "EngineThreading.h"
+ #include "FrameStallDiagnostics.h"
++#include "PacingDiagnostics.h"
+ #include "CustomHUD.h"
+ #include "IGame_Persistent.h"
+ #include "IGame_Level.h"
+@@ -10,10 +11,12 @@
+ 
+ void XRay::Engine::PreRenderThread()
+ {
++    PacingDiag::Span pacingPre(PacingDiag::Kind::PreRender);
+ 	// Avoid per-task Windows SetThreadDescription; profiler retains event labels.
+ 	PROF_THREAD("X-Ray Pre-Render");
+ 	{
+ 		PROF_EVENT("Discord Sync");
++        PacingDiag::Span pacingDiscord(PacingDiag::Kind::Discord);
+ 		g_Discord.Update();
+ 	}
+ 
+--- a/src/Layers/xrRender/dxRenderDeviceRender.cpp
++++ b/src/Layers/xrRender/dxRenderDeviceRender.cpp
+@@ -1,5 +1,11 @@
+ #include "stdafx.h"
+ #include "dxRenderDeviceRender.h"
++#ifndef _EDITOR
++#include "../../xrEngine/PacingDiagnostics.h"
++#ifdef USE_DX11
++#include <d3d11_1.h>
++#endif
++#endif
+ 
+ #ifdef DEBUG_DRAW
+ #include "dxDebugRender.h"
+@@ -104,6 +110,7 @@
+ void  dxRenderDeviceRender::Reset(SDL_Window* window, u32 &dwWidth, u32 &dwHeight, float &fWidth_2, float &fHeight_2)
+ {
+ #ifndef _EDITOR
++    PacingDiag::Span pacingReset(PacingDiag::Kind::Reset);
+ 	Resources->reset_begin	();
+ 	Memory.mem_compact		();
+ 	ResourcesDeferredUnload();
+@@ -448,6 +455,7 @@
+ #ifdef USE_DX11
+ 	{
+ 		GPU_EVENT(GAMMA_APPLY);
++        PacingDiag::Span pacingGamma(PacingDiag::Kind::Gamma);
+ 		RImplementation.Target->PhaseGammaApply();
+ 	}
+ #endif
+@@ -494,7 +502,28 @@
+ 
+ 	PROF_EVENT("Present");
+ #ifdef USE_DX11
+-	RSwapchain->Present(psDeviceFlags.test(rsVSync) ? 1 : 0, 0);
++    // Optional 64x64 camera synchronization marker, only after Win+F8
++    // in the separate helper. Never automatic and absent from normal play.
++    if (PacingDiag::SyncVisible())
++    {
++        ID3D11DeviceContext1* context1 = nullptr;
++        const auto q = PacingDiag::Counter();
++        const HRESULT syncResult = RContext->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&context1));
++        if (SUCCEEDED(syncResult) && context1)
++        {
++            const FLOAT white[4] = {1,1,1,1};
++            const D3D11_RECT rect = {0,0,64,64};
++            context1->ClearView(RSwapchainTarget, white, &rect, 1);
++            context1->Release();
++            PacingDiag::Record(PacingDiag::Kind::SyncPaint, PacingDiag::CurrentFrame(), q, PacingDiag::Counter());
++        }
++        else PacingDiag::Record(PacingDiag::Kind::SyncFailure, PacingDiag::CurrentFrame(), q, PacingDiag::Counter(), static_cast<unsigned>(syncResult));
++    }
++    const bool pacingPresent = PacingDiag::Enabled();
++    const auto presentStart = pacingPresent ? PacingDiag::Counter() : 0;
++    const HRESULT presentResult = RSwapchain->Present(psDeviceFlags.test(rsVSync) ? 1 : 0, 0);
++    if (pacingPresent) PacingDiag::Record(PacingDiag::Kind::Present, PacingDiag::CurrentFrame(), presentStart,
++        PacingDiag::Counter(), static_cast<unsigned>(presentResult));
+ #else
+ 	CHK_DX				(RDevice->EndScene());
+ 	RDevice->Present( nullptr, nullptr, nullptr, nullptr );
+--- a/src/Layers/xrRender/r__occlusion.cpp
++++ b/src/Layers/xrRender/r__occlusion.cpp
+@@ -2,6 +2,9 @@
+ #include "r__occlusion.h"
+ 
+ #include "QueryHelper.h"
++#ifndef _EDITOR
++#include "../../xrEngine/PacingDiagnostics.h"
++#endif
+ 
+ R_occlusion::R_occlusion(void)
+ {
+@@ -120,6 +123,9 @@
+ 	if (!enabled)		return 0xffffffff;
+ 
+ 	PROF_EVENT("R_occlusion::occq_get");
++#ifndef _EDITOR
++    PacingDiag::Span pacingQuery(PacingDiag::Kind::Occlusion, true);
++#endif
+ 	//	Igor: prevent release crash if we issue too many queries
+ 	if (ID == iInvalidHandle) return 0xFFFFFFFF;
+ 

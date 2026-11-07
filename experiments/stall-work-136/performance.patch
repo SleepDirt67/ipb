@@ -1,0 +1,151 @@
+--- a/src/xrCore/LocatorAPI.cpp
++++ b/src/xrCore/LocatorAPI.cpp
+@@ -953,11 +953,30 @@
+ 	_SequenceToList(masks, mask);
+ 	BOOL b_mask = !masks.empty();
+ 
+-	size_t base_len = xr_strlen(N);
+-	for (++I; I != m_files.end(); ++I)
+-	{
+-		const file& entry = *I;
+-		if (0 != strncmp(entry.name, N, base_len))	break;	// end of list
++    const size_t base_len = xr_strlen(N);
++    ++I;
++    // file_pred and PatternMatch are both bytewise/case-sensitive. With one
++    // mask, all matching files share its literal prefix. Seek that contiguous
++    // range in the existing ordered set; still run every original filter.
++    // Folder enumeration ignores masks, so it must retain the full range.
++    xr_string scan_prefix = N;
++    if ((flags & FS_ListFiles) && !(flags & FS_ListFolders) && masks.size() == 1)
++    {
++        const xr_string& pattern = masks.front();
++        const size_t prefix_len = pattern.find_first_of("*?");
++        scan_prefix.append(pattern.c_str(), prefix_len == xr_string::npos ? pattern.size() : prefix_len);
++        if (scan_prefix.size() > base_len)
++        {
++            file first = {};
++            first.name = scan_prefix.c_str();
++            I = m_files.lower_bound(first);
++        }
++    }
++    const size_t scan_len = scan_prefix.size();
++    for (; I != m_files.end(); ++I)
++    {
++        const file& entry = *I;
++        if (0 != strncmp(entry.name, scan_prefix.c_str(), scan_len)) break;
+ 		LPCSTR end_symbol = entry.name + xr_strlen(entry.name) - 1;
+ 		if ((*end_symbol) != '\\')
+ 		{
+--- a/src/xrCore/Xr_ini.cpp
++++ b/src/xrCore/Xr_ini.cpp
+@@ -151,9 +151,12 @@
+ 
+ void CInifile::EvaluateSection(xr_string SectionName, xr_vector<xr_string>& PreviousEvaluations)
+ {
+-	std::unordered_set<xr_string> FinalizedSections;
+-
+-	if (FinalizedSections.contains(SectionName))
++    // FinalData already owns the first completed result used by all readers.
++    // The old function-local FinalizedSections was empty on every recursive
++    // call, so shared ancestors were recomputed and then discarded by emplace.
++    // Deleted/omitted sections are intentionally NOT skipped: they have no
++    // FinalData entry and retain the original reevaluation/error behavior.
++    if (FinalData.contains(SectionName))
+ 		return;
+ 
+ 	PreviousEvaluations.push_back(SectionName);
+@@ -415,7 +418,6 @@
+ 		FinalData.emplace(CurrentSecPair);
+ 	}
+ 
+-	FinalizedSections.insert(SectionName);
+ }
+ 
+ void CInifile::MergeParentSet(xr_vector<xr_string>& ParentsBase, xr_vector<xr_string>& ParentsOverride, bool bIncludeRemovers)
+@@ -554,8 +556,12 @@
+ 	if (S == nullptr || L == nullptr)
+ 		return false;
+ 
+-	if (!section_exist(S)) return FALSE;
+-	Sect&	I = r_section(S);
++    const RootCIt found = std::lower_bound(DATA.begin(), DATA.end(), S, sect_pred);
++    if (found == DATA.end() || xr_strcmp(*(*found)->Name, S) != 0) return FALSE;
++    // Preserve section_exist's case-sensitive gate and r_section's lowercase
++    // semantics, including unusual mixed-case sections written at runtime.
++    char section[256]; xr_strcpy(section, sizeof(section), S); _strlwr(section);
++    const Sect& I = *S && xr_strcmp(section, S) == 0 ? **found : r_section(S);
+ 	SectCIt A = std::lower_bound(I.Data.begin(),I.Data.end(),L,item_pred);
+ 	return (A!=I.Data.end() && xr_strcmp(*A->first,L)==0);
+ }
+@@ -1139,7 +1145,7 @@
+ 
+ 			auto GetRegexMatch = [](const xr_string& InputString, const xr_string& PatternString)->xr_string
+ 			{
+-				std::regex Pattern = std::regex(PatternString);
++                static const std::regex Pattern("^.+(?=.ltx$)");
+ 				std::smatch MatchResult;
+ 
+                                 std::string searcher = InputString.c_str();
+@@ -1153,6 +1159,7 @@
+ 				return MatchResult.begin()->str().c_str();
+ 			};
+ 
++            xr_map<xr_string, std::regex> ambiguousPatterns;
+ 			for (const FS_File& ModFile : ModFiles)
+ 			{
+ 				// Determine if we should load this mod file, or if it's meant for a different root file
+@@ -1160,15 +1167,14 @@
+ 
+ 				for (const FS_File& AmbiguousFile : AmbiguousFiles)
+ 				{
+-					xr_string AmbiguousFileName = GetRegexMatch(AmbiguousFile.name, "^.+(?=.ltx$)");
+-					xr_string AmbiguousFileMatchPattern = xr_string("mod_") + AmbiguousFileName + "_.+.ltx";
+-
+-					auto IsFullRegexMatch = [](const xr_string& InputString, const xr_string& PatternString)
+-					{
+-						return std::regex_match(InputString, std::regex(PatternString));
+-					};
+-
+-					if (IsFullRegexMatch(ModFile.name, AmbiguousFileMatchPattern))
++                    auto cached = ambiguousPatterns.find(AmbiguousFile.name);
++                    if (cached == ambiguousPatterns.end())
++                    {
++                        const xr_string name = GetRegexMatch(AmbiguousFile.name, "^.+(?=.ltx$)");
++                        const xr_string pattern = xr_string("mod_") + name + "_.+.ltx";
++                        cached = ambiguousPatterns.try_emplace(AmbiguousFile.name, pattern.c_str()).first;
++                    }
++                    if (std::regex_match(ModFile.name, cached->second))
+ 					{
+ 						bIsModfileMeantForMe = false;
+ 						break;
+--- a/src/xrEngine/EngineThreading.cpp
++++ b/src/xrEngine/EngineThreading.cpp
+@@ -75,5 +75,6 @@
+ 			Device.seqFrameMT.Process(rp_Frame);
+ 	}
+ 
+-	Platform::SetThreadName("X-Ray Empty Task");
++    // Pooled worker naming is not part of task completion. Avoid the remaining
++    // per-frame SetThreadDescription call (the earlier patch removed others).
+ }
+--- a/src/xrScripts/script_storage.cpp
++++ b/src/xrScripts/script_storage.cpp
+@@ -468,6 +468,18 @@
+ bool CScriptStorage::object	(LPCSTR identifier, int type)
+ {
+ 	int						start = lua_gettop(lua());
++    // Successful string-key lookup needs no table traversal. Use raw access so
++    // __index is never executed. Keep the legacy scan for numeric-key aliases,
++    // missing keys and type mismatches; consume the namespace table as before.
++    lua_pushstring(lua(), identifier);
++    lua_rawget(lua(), -2);
++    if (lua_type(lua(), -1) == type && type != LUA_TNIL)
++    {
++        lua_pop(lua(), 2);
++        VERIFY(lua_gettop(lua()) == start - 1);
++        return true;
++    }
++    lua_pop(lua(), 1);
+ 	lua_pushnil				(lua()); 
+ 	while (lua_next(lua(), -2)) {
+ 		auto luaType = lua_type(lua(), -1);

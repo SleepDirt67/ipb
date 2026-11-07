@@ -1,0 +1,13 @@
+diff --git a/src/Layers/xrRender/QueryHelper.h b/src/Layers/xrRender/QueryHelper.h
+--- a/src/Layers/xrRender/QueryHelper.h
++++ b/src/Layers/xrRender/QueryHelper.h
+@@ -21,8 +21,8 @@
+ 	return RDevice->CreateQuery( &desc, ppQuery);
+ }
+ 
+-IC HRESULT GetData( ID3DQuery *pQuery, void *pData, UINT DataSize, u32 Flags = 0)
++IC HRESULT GetData( ID3DQuery *pQuery, void *pData, UINT DataSize, u32 Flags = D3D11_ASYNC_GETDATA_DONOTFLUSH)
+ {
+ 	//	Use D3Dxx_ASYNC_GETDATA_DONOTFLUSH for prevent flushing
+ 	return RContext->GetData(pQuery, pData, DataSize, Flags);
+ }

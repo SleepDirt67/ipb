@@ -1,0 +1,471 @@
+name: IX-Ray Windows x64 Release
+on:
+  push:
+    branches: [main, 'experiment/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Windows x64 / gameplay stall fixes, regression tests and complete package
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout experiment
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Checkout original IX-Ray r1.3.6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ixray-team/ixray-1.6-stcop
+          ref: 612b165c97d5e6a50ac0a6d1384ac8c95a63dda5
+          path: ixray
+          persist-credentials: false
+
+      - name: Verify the exact public source export
+        run: python ci/source_lock.py
+
+      - name: Apply canonical physical HOLD controls
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_Unified_Hold_Controls.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Physical HOLD patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Physical HOLD patch apply failed' }
+
+      - name: Apply canonical mouse-wheel zoom direction
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_ScrollZoom_Fix.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Mouse-wheel patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Mouse-wheel patch apply failed' }
+
+      - name: Restore physical Ctrl+Shift crouch-sprint and its animations
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_Hold_CrouchSprint_Source.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Crouch-sprint patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Crouch-sprint patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply only the no-flush occlusion-query patch
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_Occlusion_NoFlush.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply dynamic-buffer capacity experiment
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_DynamicBuffers_2x.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic buffer patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic buffer patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply DXGI frame queue cap experiment
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_FrameLatency2.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'DXGI frame latency patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'DXGI frame latency patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply CPU allocation and synchronization improvements
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Batch_Perf.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU batch patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU batch patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply CPU streaming and graph optimization batch
+        shell: pwsh
+        run: |
+          # Original r1.3.6 has a mix of CRLF and LF files.
+          # Normalize only the three sources touched by this patch; source semantics are unchanged.
+          @'
+          from pathlib import Path
+          for name in ('src/xrEngine/AI/game_graph.cpp', 'src/Layers/xrRender/DetailManager_CACHE.cpp', 'src/Layers/xrRender/DetailManager.cpp'):
+              p = Path('ixray') / name
+              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
+          patch_file = Path('IXRay_136_CPU_Streaming_Batch2.patch')
+          patch_file.write_bytes(patch_file.read_bytes().replace(b'\r\n', b'\n'))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Source newline normalization failed' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Streaming_Batch2.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU streaming patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU streaming patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply triangle precompute and game graph optimization batch
+        shell: pwsh
+        run: |
+          # Normalize the source and the patch; Actions on Windows checks out mixed EOLs.
+          @'
+          from pathlib import Path
+          for name in ('src/Layers/xrRender/DetailManager_Decompress.cpp', 'src/xrEngine/AI/game_graph.cpp'):
+              p = Path('ixray') / name
+              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
+          patch_file = Path('IXRay_136_CPU_Grass_Graph_Batch3.patch')
+          patch_file.write_bytes(patch_file.read_bytes().replace(b'\r\n', b'\n'))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Source normalization for grass/graph batch failed' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Grass_Graph_Batch3.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Grass/graph patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Grass/graph patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Add opt-in frame-correlated diagnostics (replaces old trace)
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_frame_diagnostics.py
+          if ($LASTEXITCODE -ne 0) { throw 'Frame attribution overlay failed' }
+          # The base IX-Ray tree and existing gameplay patches contain historical
+          # trailing whitespace. Whole-tree git diff --check rejects those unrelated
+          # lines after mixed-EOL source normalization; checked anchors above are strict.
+          git -C ixray diff --stat
+
+      - name: Add focused spawn and Scheduler hotpath timing
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_spawn_scheduler_detail.py
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn and scheduler hotpath overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Apply conservative engine hotpath fixes
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_engine_hotpath_fixes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Conservative hotpath fix overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Restore original FS retry and protect scripted main menu factory
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_mainmenu_crashfix.py
+          if ($LASTEXITCODE -ne 0) { throw 'Script factory crashfix overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Remove class layout ABI break introduced by CLASS_ID caching
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_restore_objectpool_abi.py
+          if ($LASTEXITCODE -ne 0) { throw 'ABI restore patch failed' }
+          git -C ixray diff --stat
+
+      - name: Apply verified semantic hotpaths and correlated trace
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_stall_work.py
+          if ($LASTEXITCODE -ne 0) { throw 'Semantic overlay or ABI/control checks failed' }
+          New-Item -ItemType Directory -Force checks | Out-Null
+          python experiments/stall-work-136/tests/generate_tests.py ixray checks/generated
+          if ($LASTEXITCODE -ne 0) { throw 'Differential test generation failed' }
+
+      - name: Apply post-PR16 audit candidate with protected source guards
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_audit_work.py
+          if ($LASTEXITCODE -ne 0) { throw 'Audit overlay failed' }
+          python experiments/audit-136/tests/generate_tests.py ixray checks/audit-generated checks/pr16-source
+          if ($LASTEXITCODE -ne 0) { throw 'Audit test generation failed' }
+
+      - name: Apply independent pacing overlay and protected source checks
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_pacing.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing overlay failed' }
+
+      - name: Test pacing buffer, marker, ETW provider and headless CPU PresentMon alignment
+        shell: pwsh
+        run: |
+          cmake -S experiments/periodic-136 -B checks/pacing-tests -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing native configure failed' }
+          cmake --build checks/pacing-tests --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing native compile failed' }
+          python tools/pdb_identity.py checks/pacing-tests/Release/test_pacing.exe checks/pacing-tests/Release/test_pacing.pdb | Tee-Object checks/pdb_identity_smoke.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual PE/PDB identity parser smoke failed' }
+          $env:IXRAY_PACING_DIR="$env:GITHUB_WORKSPACE/checks/pacing-disabled"
+          New-Item -ItemType Directory -Force $env:IXRAY_PACING_DIR | Out-Null
+          & checks/pacing-tests/Release/test_pacing.exe disabled | Tee-Object checks/pacing_disabled.txt
+          if ($LASTEXITCODE -ne 0 -or @(Get-ChildItem $env:IXRAY_PACING_DIR -File).Count) { throw 'Disabled pacing initialized output' }
+          $env:IXRAY_PACING_DIR="$env:GITHUB_WORKSPACE/checks/pacing-normal"
+          New-Item -ItemType Directory -Force $env:IXRAY_PACING_DIR | Out-Null
+          & checks/pacing-tests/Release/test_pacing.exe | Tee-Object checks/pacing_native.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing concurrent/sync fixture failed' }
+          python experiments/periodic-136/verify_native_capture.py $env:IXRAY_PACING_DIR | Tee-Object -Append checks/pacing_native.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing normal CSV verification failed' }
+          $env:IXRAY_PACING_DIR="$env:GITHUB_WORKSPACE/checks/pacing-overflow"
+          New-Item -ItemType Directory -Force $env:IXRAY_PACING_DIR | Out-Null
+          & checks/pacing-tests/Release/test_pacing.exe overflow | Tee-Object -Append checks/pacing_native.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing overflow fixture failed' }
+          python experiments/periodic-136/verify_native_capture.py $env:IXRAY_PACING_DIR overflow | Tee-Object -Append checks/pacing_native.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing overflow CSV verification failed' }
+          wpr.exe -profiles experiments/periodic-136/IXRayPacing.wprp | Tee-Object checks/pacing_wpr.txt
+          if ($LASTEXITCODE -ne 0) { throw 'WPR profile schema rejected' }
+          $env:IXRAY_PACING_DIR="$env:GITHUB_WORKSPACE/checks/pacing-etw"
+          New-Item -ItemType Directory -Force $env:IXRAY_PACING_DIR | Out-Null
+          wpr.exe -start ((Resolve-Path experiments/periodic-136/IXRayPacing.wprp).Path+'!IXRayPacing')
+          if ($LASTEXITCODE -ne 0) { throw 'Native ETW provider session start failed' }
+          try {
+            & checks/pacing-tests/Release/test_pacing.exe | Tee-Object -Append checks/pacing_wpr.txt
+            if ($LASTEXITCODE -ne 0) { throw 'Native ETW emitting fixture failed' }
+          } finally {
+            wpr.exe -stop checks/pacing-etw/smoke.etl 'pacing provider smoke'
+            if ($LASTEXITCODE -ne 0) { throw 'Native ETW provider save failed' }
+          }
+          tracerpt.exe checks/pacing-etw/smoke.etl -o checks/pacing-etw/events.xml -of XML -lr -y | Tee-Object -Append checks/pacing_wpr.txt
+          if ($LASTEXITCODE -ne 0) { throw 'TraceLogging decoding failed' }
+          if (-not (Select-String -Path checks/pacing-etw/events.xml -Pattern 'QPCStart' -Quiet)) { throw 'TraceLogging payload not decoded' }
+          'PASS: native TraceLogging spans were recorded and decoded from ETL' | Tee-Object -Append checks/pacing_wpr.txt
+          python experiments/periodic-136/verify_join_fixture.py | Tee-Object checks/pacing_join.txt
+          if ($LASTEXITCODE -ne 0) { throw 'QPC alignment rejection fixture failed' }
+
+          Invoke-WebRequest https://github.com/GameTechDev/PresentMon/releases/download/v2.6.0/PresentMon-2.6.0-x64.exe -OutFile checks/PresentMon-2.6.0-x64.exe
+          if ((Get-FileHash checks/PresentMon-2.6.0-x64.exe -Algorithm SHA256).Hash.ToLower() -ne 'b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af') { throw 'PresentMon checksum mismatch' }
+          Invoke-WebRequest https://raw.githubusercontent.com/GameTechDev/PresentMon/v2.6.0/LICENSE.txt -OutFile checks/PresentMon-LICENSE.txt
+          $helpProcess=Start-Process checks/PresentMon-2.6.0-x64.exe -ArgumentList '--help' -Wait -PassThru -RedirectStandardOutput checks/presentmon_help_stdout.txt -RedirectStandardError checks/presentmon_help_stderr.txt
+          $help=[string](Get-Content checks/presentmon_help_stdout.txt -Raw)+[string](Get-Content checks/presentmon_help_stderr.txt -Raw)
+          $help | Set-Content checks/presentmon_help.txt -Encoding UTF8
+          "PresentMon --help exit code: $($helpProcess.ExitCode); verified captured stdout+stderr" | Tee-Object checks/presentmon_cli.txt
+          foreach ($option in @('--qpc_time','--write_display_metadata','--process_id','--terminate_on_proc_exit')) { if (-not $help.Contains($option)) { throw "Unsupported PresentMon option $option" } }
+          $tokens=$null;$errors=$null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path experiments/periodic-136/capture.ps1),[ref]$tokens,[ref]$errors) | Out-Null
+          if ($errors.Count) { throw "Capture PowerShell parser errors: $errors" }
+          Remove-Item Env:IXRAY_PACING_DIR
+          cmake -S verification/pacing -B checks/pacing-present -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Controlled Present fixture configure failed' }
+          cmake --build checks/pacing-present --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Controlled Present fixture compile failed' }
+          & verification/pacing/run_present_smoke.ps1 -PresentMon checks/PresentMon-2.6.0-x64.exe -Marker checks/pacing-tests/Release/ixray_pacing_marks.exe -Fixture checks/pacing-present/Release/ixray_pacing_present_smoke.exe -Output checks/pacing-present-capture | Tee-Object checks/pacing_present_smoke.txt
+          python verification/pacing/verify_present_smoke.py checks/pacing-present-capture experiments/periodic-136 | Tee-Object -Append checks/pacing_present_smoke.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual PresentMon QPC join failed' }
+          Copy-Item checks/pacing-present-capture/JOIN_SUMMARY.json checks/PACING_ACTUAL_PRESENTMON_JOIN.json
+
+
+      - name: Add sparse gameplay attribution and optional DX11 pixel observations
+        shell: pwsh
+        run: |
+          python experiments/auto-pacing-136/followup/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay attribution overlay failed' }
+
+      - name: Apply and compare stack-backed sound and level-search fixes
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/hotpaths/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath overlay failed' }
+          cmake -S experiments/periodic-136/hotpaths -B checks/stack-hotpaths -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath fixture configure failed' }
+          cmake --build checks/stack-hotpaths --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath fixture build failed' }
+          & checks/stack-hotpaths/Release/ixray_stack_hotpaths.exe | Tee-Object checks/STACK_HOTPATHS_DIFFERENTIAL.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath differential fixture failed' }
+
+      - name: Prewarm traced DX11 variants and verify cold and warm bytecode
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/shader-warmup/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm overlay failed' }
+          cmake -S experiments/periodic-136/shader-warmup -B checks/shader-warmup -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture configure failed' }
+          cmake --build checks/shader-warmup --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture build failed' }
+          & checks/shader-warmup/Release/ixray_shader_warmup.exe "$env:GITHUB_WORKSPACE/ixray/gamedata/shaders" "$env:RUNNER_TEMP/ixray-shader-prewarm" | Tee-Object checks/PACING_SHADER_WARMUP_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture failed' }
+
+      - name: Checkout the exact Luabind dependency used by Shader Warmup
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ForserX/luabind-latest
+          ref: 128ba59572e508f0c550f4ff8a5235c07c77de3d
+          path: ixray/build/x64/Engine-Windows/_deps/luabind-src
+          persist-credentials: false
+
+      - name: Apply Luabind and numbered sound fixes and extract both versions
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/gameplay-stalls/generate.py ixray ixray/build/x64/Engine-Windows/_deps/luabind-src checks/gameplay-stalls-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls overlay failed' }
+
+      - name: Apply loading-time sound preparation and guarded script configuration reuse
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/spawn-resources/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Resource preparation overlay failed' }
+
+      - name: Wire prepared spawn plans into the stock Lua path
+        run: python ci/spawn/apply.py ixray
+
+      - name: Configure engine
+        shell: pwsh
+        working-directory: ixray
+        run: |
+          cmake --preset Engine-x64-Windows "-DFETCHCONTENT_SOURCE_DIR_LUABIND=$env:GITHUB_WORKSPACE/ixray/build/x64/Engine-Windows/_deps/luabind-src"
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
+
+      - name: Verify Luabind lookup and sound selection against the exact Windows Lua runtime
+        shell: pwsh
+        run: |
+          $fixture = 'experiments/periodic-136/gameplay-stalls'
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Shader Warmup Lua runtime mismatch' }
+          cmake -S $fixture -B checks/gameplay-stalls -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/gameplay-stalls-generated" "-DENGINE=$env:GITHUB_WORKSPACE/ixray" "-DLUA_LIB=$($lua.FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls fixture configure failed' }
+          cmake --build checks/gameplay-stalls --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls fixture compilation failed' }
+          Copy-Item -LiteralPath $dll -Destination checks/gameplay-stalls/Release/
+          & checks/gameplay-stalls/Release/ixray_gameplay_stalls.exe | Tee-Object checks/GAMEPLAY_STALLS_DIFFERENTIAL.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls differential fixture failed' }
+
+      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
+          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
+          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
+          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
+
+      - name: Compare prepared audio metadata using the exact Windows Vorbis DLL
+        shell: pwsh
+        run: |
+          $fixture = 'experiments/periodic-136/spawn-resources'
+          $packages = 'ixray/build/x64/Engine-Windows/packages'
+          $vorbis = Get-ChildItem $packages -Directory -Filter ImeSense.Packages.LibVorbis.* | Select-Object -First 1
+          $ogg = Get-ChildItem $packages -Directory -Filter ImeSense.Packages.LibOgg.* | Select-Object -First 1
+          if (-not $vorbis -or -not $ogg) { throw 'Windows Ogg/Vorbis dependency missing' }
+          $library = Join-Path $vorbis.FullName 'native/lib/x64/Release/libvorbisfile.lib'
+          if (-not (Test-Path -LiteralPath $library)) { throw 'x64 Vorbis import library missing' }
+          python "$fixture/make_ogg_fixtures.py" checks/ogg-fixtures
+          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture creation failed' }
+          cmake -S $fixture -B checks/wave -A x64 "-DVORBIS_INCLUDE=$($vorbis.FullName)/native/include" "-DOGG_INCLUDE=$($ogg.FullName)/native/include" "-DVORBISFILE_LIB=$library"
+          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture configure failed' }
+          cmake --build checks/wave --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture compilation failed' }
+          foreach ($pair in @(@($vorbis.FullName,'libvorbisfile.dll'), @($vorbis.FullName,'libvorbis.dll'), @($ogg.FullName,'libogg.dll'))) {
+            $dll = Join-Path $pair[0] ("native/bin/x64/Release/" + $pair[1])
+            if (-not (Test-Path -LiteralPath $dll)) { throw "Missing fixture runtime $($pair[1])" }
+            Copy-Item -LiteralPath $dll -Destination checks/wave/Release/
+          }
+          & checks/wave/Release/ixray_spawn_wave_check.exe checks/ogg-fixtures | Tee-Object checks/SPAWN_WAVE_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'OGG metadata differential failed' }
+
+      - name: Run native differential tests against the exact Lua runtime
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          cmake -S experiments/stall-work-136/tests -B checks/tests -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/generated" "-DENGINE=$env:GITHUB_WORKSPACE/ixray" "-DLUA_LIB=$($lua.FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'Test configure failed' }
+          cmake --build checks/tests --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Test compile failed' }
+          $luaDll=Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          Copy-Item $luaDll checks/tests/Release/
+          foreach ($name in @('filesystem','regex','lua_lookup','ini','ini_evaluation')) {
+            & "checks/tests/Release/$name.exe" | Tee-Object "checks/$name.txt"
+            if ($LASTEXITCODE -ne 0) { throw "Differential test failed: $name" }
+          }
+
+      - name: Run actual-source audit differential tests
+        shell: pwsh
+        run: |
+          cmake -S experiments/audit-136/tests -B checks/audit-tests -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/audit-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Audit test configure failed' }
+          cmake --build checks/audit-tests --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Audit test compile failed' }
+          foreach ($name in @('materialization','xml_navigation','cell_cleanup','container_cleanup','model_lifecycle')) {
+            & "checks/audit-tests/Release/$name.exe" | Tee-Object "checks/$name.txt"
+            if ($LASTEXITCODE -ne 0) { throw "Audit differential failed: $name" }
+          }
+
+      - name: Test installer and rollback in a disposable fixture
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File experiments/audit-136/tests/test_installer.ps1 | Tee-Object checks/installer_audit.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Installer roundtrip test failed' }
+
+      - name: Seal transformed engine sources
+        run: python ci/engine_inputs.py --seal
+
+      - name: Compile HOLD-compatible engine, game DLL, abstractions and DX11 renderer
+        shell: pwsh
+        working-directory: ixray
+        run: |
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
+
+      - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
+        shell: pwsh
+        run: |
+          $fixture = (Resolve-Path 'ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_ini_check.exe').Path
+          & $fixture | Tee-Object checks/SPAWN_INI_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual script INI differential failed' }
+
+      - name: Verify actual CInifile and package the exact Release
+        shell: pwsh
+        run: |
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_audit_core_test.exe | Tee-Object checks/PUBLIC_ACTUAL_CORE.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore fixture failed' }
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_plan_fixture.exe | Tee-Object checks/SPAWN_PLAN_NATIVE.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
+          python ci/engine_inputs.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
+          python ci/package.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release package failed' }
+          & ci/verify_package.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows install or rollback failed' }
+
+      - name: Upload tested full Release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: IXRay-1.3.6-Windows-x64-Release
+          path: package/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload matching symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: IXRay-1.3.6-Windows-x64-PDB
+          path: symbols/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload automated test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Windows-QA
+          path: |
+            checks/*.txt
+            checks/*.json
+          retention-days: 14

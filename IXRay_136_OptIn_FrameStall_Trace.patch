@@ -1,0 +1,81 @@
+diff --git a/src/xrEngine/device.cpp b/src/xrEngine/device.cpp
+--- a/src/xrEngine/device.cpp
++++ b/src/xrEngine/device.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include <chrono>
+ 
+ #include "../xrCore/Collision/Frustum.h"
+ 
+@@ -305,7 +306,29 @@
+ 		Statistic->RenderTOTAL_Real.FrameEnd();
+ 		Statistic->RenderTOTAL.accum = Statistic->RenderTOTAL_Real.accum;
+ 	}
+-	secondary_tasks.wait();
++	// Opt-in CPU stall diagnostics, disabled completely by default.
++	static const bool traceFrameWait = []()
++	{
++		char flag[2] = {};
++		return GetEnvironmentVariableA("IXRAY_TRACE_FRAME_STALLS", flag, sizeof(flag)) == 1 && flag[0] == '1';
++	}();
++	if (traceFrameWait)
++	{
++		const auto waitStart = std::chrono::steady_clock::now();
++		secondary_tasks.wait();
++		const auto waitEnd = std::chrono::steady_clock::now();
++		const double waitMs = std::chrono::duration<double, std::milli>(waitEnd - waitStart).count();
++		static auto lastWaitReport = waitStart - std::chrono::seconds(3);
++		if (waitMs >= 4.0 && waitEnd - lastWaitReport >= std::chrono::seconds(2))
++		{
++			Msg("! FRAMESTALL GameThread wait %.2f ms; frame %u", waitMs, dwFrame);
++			lastWaitReport = waitEnd;
++		}
++	}
++	else
++	{
++		secondary_tasks.wait();
++	}
+ 
+ 	Device.EndRender();
+ 	if (!b_is_Active)
+diff --git a/src/xrEngine/EngineThreading.cpp b/src/xrEngine/EngineThreading.cpp
+--- a/src/xrEngine/EngineThreading.cpp
++++ b/src/xrEngine/EngineThreading.cpp
+@@ -1,4 +1,5 @@
+ #include "stdafx.h"
++#include <chrono>
+ #include "EngineThreading.h"
+ #include "CustomHUD.h"
+ #include "IGame_Persistent.h"
+@@ -56,8 +57,30 @@
+ 
+ 	{
+ 		PROF_EVENT("Sheduler")
++			// Match the opt-in wait timer on the main thread.
++			static const bool traceScheduler = []()
++			{
++				char flag[2] = {};
++				return GetEnvironmentVariableA("IXRAY_TRACE_FRAME_STALLS", flag, sizeof(flag)) == 1 && flag[0] == '1';
++			}();
+ 			if (!Device.Paused())
+-				::Engine.Sheduler.Update();
++			{
++				if (traceScheduler)
++				{
++					const auto start = std::chrono::steady_clock::now();
++					::Engine.Sheduler.Update();
++					const auto end = std::chrono::steady_clock::now();
++					const double elapsedMs = std::chrono::duration<double, std::milli>(end - start).count();
++					static auto lastSchedulerReport = start - std::chrono::seconds(3);
++					if (elapsedMs >= 4.0 && end - lastSchedulerReport >= std::chrono::seconds(2))
++					{
++						Msg("! FRAMESTALL Scheduler %.2f ms; frame %u", elapsedMs, Device.dwFrame);
++						lastSchedulerReport = end;
++					}
++				}
++				else
++					::Engine.Sheduler.Update();
++			}
+ 	}
+ 
+ 	{

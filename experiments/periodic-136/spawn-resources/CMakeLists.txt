@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(IXRaySpawnResourceChecks LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+add_executable(ixray_spawn_wave_check wave_fixture.cpp)
+target_include_directories(ixray_spawn_wave_check PRIVATE "${VORBIS_INCLUDE}" "${OGG_INCLUDE}")
+target_link_libraries(ixray_spawn_wave_check PRIVATE "${VORBISFILE_LIB}")

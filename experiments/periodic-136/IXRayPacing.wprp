@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WindowsPerformanceRecorder Version="1.0" Author="IXRay pacing experiment">
+  <Profiles>
+    <EventCollector Id="PacingCollector" Name="IXRayPacing">
+      <BufferSize Value="64"/><Buffers Value="128"/>
+    </EventCollector>
+    <EventProvider Id="PacingProvider" Name="a6b3f9d1-865e-4c3d-a85b-31c2e7101360"/>
+    <Profile Id="IXRayPacing.Verbose.Memory" Name="IXRayPacing" Description="QPC-aligned engine spans" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors><EventCollectorId Value="PacingCollector"><EventProviders><EventProviderId Value="PacingProvider"/></EventProviders></EventCollectorId></Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

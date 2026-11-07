@@ -1,0 +1,150 @@
+diff --git a/src/xrEngine/device.cpp b/src/xrEngine/device.cpp
+--- a/src/xrEngine/device.cpp
++++ b/src/xrEngine/device.cpp
+@@ -176,14 +176,18 @@
+ 
+ 
+ 	PROF_FRAME("Main Thread");
+-	Platform::SetThreadName("X-Ray Primary Thread");
++	// Main thread is already named once during engine startup.
+ 
+ 	Device.BeginRender();
+ 	const bool Minimized = SDL_GetWindowFlags(g_AppInfo.Window) & SDL_WINDOW_MINIMIZED;
+ 	const bool Focus = psDeviceFlags.test(rsFullscreen) || (!Minimized && !main_menu_active && !CImGuiManager::Instance().IsCapturingInputs());
+ 
+-	SDL_SetWindowMouseGrab(g_AppInfo.Window, !g_dedicated_server && Focus);
+-	SDL_SetWindowRelativeMouseMode(g_AppInfo.Window, !g_dedicated_server && Focus);
++	// Avoid repeated SDL/OS grab-mode changes on every frame.
++	const bool shouldGrab = !g_dedicated_server && Focus;
++	if (SDL_GetWindowMouseGrab(g_AppInfo.Window) != shouldGrab)
++		SDL_SetWindowMouseGrab(g_AppInfo.Window, shouldGrab);
++	if (SDL_GetWindowRelativeMouseMode(g_AppInfo.Window) != shouldGrab)
++		SDL_SetWindowRelativeMouseMode(g_AppInfo.Window, shouldGrab);
+ 
+ 	g_bEnableStatGather = psDeviceFlags.test(rsStatistic);
+ 
+@@ -415,15 +419,14 @@
+ 		size_t count = buffer_filled ? BUFFER_SIZE : current_index;
+ 		if (count == 0) return 0.0f;
+ 
+-		if (!buffer_filled)
+-			std::sort(buffer.begin(), buffer.begin() + count);
+-		else
+-			std::sort(buffer.begin(), buffer.end());
++		// Sorting the ring buffer in place corrupts temporal sample order.
++		auto sorted = buffer;
++		std::sort(sorted.begin(), sorted.begin() + count);
+ 
+ 		if (count % 2 == 0)
+-			cached_median = (buffer[count / 2 - 1] + buffer[count / 2]) / 2.0f;
++			cached_median = (sorted[count / 2 - 1] + sorted[count / 2]) / 2.0f;
+ 		else
+-			cached_median = buffer[count / 2];
++			cached_median = sorted[count / 2];
+ 
+ 		median_dirty = false;
+ 		return cached_median;
+@@ -460,13 +463,12 @@
+ 		size_t count = buffer_filled ? BUFFER_SIZE : current_index;
+ 		if (count < 5) return median * 2.0f;
+ 
+-		std::vector<float> deviations;
+-		deviations.reserve(count);
+-
++		// Fixed eight-sample median absolute deviation: no per-frame heap allocation.
++		xr_array<float, BUFFER_SIZE> deviations = {};
+ 		for (size_t i = 0; i < count; ++i)
+-			deviations.push_back(std::abs(buffer[i] - median));
++			deviations[i] = std::abs(buffer[i] - median);
+ 
+-		std::sort(deviations.begin(), deviations.end());
++		std::sort(deviations.begin(), deviations.begin() + count);
+ 		float mad = deviations[count / 2];
+ 
+ 		return median + 3.0f * mad;
+diff --git a/src/xrEngine/EngineThreading.cpp b/src/xrEngine/EngineThreading.cpp
+--- a/src/xrEngine/EngineThreading.cpp
++++ b/src/xrEngine/EngineThreading.cpp
+@@ -9,7 +9,7 @@
+ 
+ void XRay::Engine::PreRenderThread()
+ {
+-	Platform::SetThreadName("X-Ray Pre-Render");
++	// Avoid per-task Windows SetThreadDescription; profiler retains event labels.
+ 	PROF_THREAD("X-Ray Pre-Render");
+ 	{
+ 		PROF_EVENT("Discord Sync");
+@@ -33,12 +33,12 @@
+ 		Device.ParticleWorkerCallback();
+ 	}
+ 
+-	Platform::SetThreadName("X-Ray Empty Task");
++	// Avoid per-frame pooled-worker thread renaming.
+ }
+ 
+ void XRay::Engine::GameThread()
+ {
+-	Platform::SetThreadName("X-Ray Game Thread");
++	// Game task labels are already supplied to the profiler.
+ 
+ 	PROF_THREAD("X-Ray Game Thread")
+ 		// we has granted permission to execute
+diff --git a/src/xrEngine/xrSheduler.cpp b/src/xrEngine/xrSheduler.cpp
+--- a/src/xrEngine/xrSheduler.cpp
++++ b/src/xrEngine/xrSheduler.cpp
+@@ -12,6 +12,11 @@
+ {
+ 	m_current_step_obj	= nullptr;
+ 	m_processing_now	= false;
++	// Allocate small reusable scheduling queues outside active gameplay frames.
++	ItemsRT.reserve(128);
++	Items.reserve(512);
++	ItemsProcessed.reserve(128);
++	Registration.reserve(128);
+ }
+ 
+ void CSheduler::Destroy			()
+@@ -326,7 +331,7 @@
+ 		TNext.dwTimeForExecute		= dwTime+dwUpdate;
+ 		TNext.dwTimeOfLastExecute	= dwTime;
+ 		TNext.Object				= T.Object;
+-		TNext.scheduled_name		= T.Object->shedule_Name();
++		TNext.scheduled_name		= T.scheduled_name;
+ 		ItemsProcessed.push_back	(TNext);
+ 
+ 
+diff --git a/src/Layers/xrRender/ModelPool.cpp b/src/Layers/xrRender/ModelPool.cpp
+--- a/src/Layers/xrRender/ModelPool.cpp
++++ b/src/Layers/xrRender/ModelPool.cpp
+@@ -329,12 +329,15 @@
+ 
+ void CModelPool::DeleteQueuedDeffer()
+ {
+-	xrCriticalSectionGuard guard(&deffered_del_lock);
++	// Transfer the pending set while locked; model destruction may be expensive.
++	xr_set<dxRender_Visual*> pending;
++	{
++		xrCriticalSectionGuard guard(&deffered_del_lock);
++		pending.swap(ModelsToDeleteDeffer);
++	}
+ 
+-	for (dxRender_Visual* Vis : ModelsToDeleteDeffer)
++	for (dxRender_Visual* Vis : pending)
+ 		DeleteInternal(Vis);
+-
+-	ModelsToDeleteDeffer.clear();
+ }
+ 
+ void CModelPool::Discard(dxRender_Visual*& V, BOOL b_complete)
+diff --git a/src/Layers/xrRender/DetailManager.cpp b/src/Layers/xrRender/DetailManager.cpp
+--- a/src/Layers/xrRender/DetailManager.cpp
++++ b/src/Layers/xrRender/DetailManager.cpp
+@@ -72,6 +72,8 @@
+ 	cache_level1.resize(dm_cache1_line, xr_vector<CacheSlot1>(dm_cache1_line));
+ 	cache.resize(dm_cache_line, xr_vector<Slot*>(dm_cache_line));
+ 	cache_pool.resize(dm_cache_size);
++	// Avoid growth allocations during movement-driven detail cache updates.
++	cache_task.reserve(dm_cache_size);
+ }
+ 
+ void CDetailManager::cache_Free()

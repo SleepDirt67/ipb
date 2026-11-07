@@ -1,0 +1,213 @@
+diff --git a/src/Layers/xrRender/DetailManager_Decompress.cpp b/src/Layers/xrRender/DetailManager_Decompress.cpp
+--- a/src/Layers/xrRender/DetailManager_Decompress.cpp
++++ b/src/Layers/xrRender/DetailManager_Decompress.cpp
+@@ -9,11 +9,11 @@
+ #endif
+ 
+ //--------------------------------------------------- Decompression
+-IC float	Interpolate			(float* base,		u32 x, u32 y, u32 size)
++IC float	Interpolate			(float* base,		float fx, float fy)
+ {
+-	float	f	= float(size);
+-	float	fx	= float(x)/f; float ifx = 1.f-fx;
+-	float	fy	= float(y)/f; float ify = 1.f-fy;
++	// Interpolation fractions are shared by the four palettes for each cell.
++	float ifx = 1.f-fx;
++	float ify = 1.f-fy;
+ 
+ 	float	c01	= base[0]*ifx + base[1]*fx;
+ 	float	c23	= base[2]*ifx + base[3]*fx;
+@@ -26,11 +26,11 @@
+ 	return	(cx+cy)/2;
+ }
+ 
+-IC bool		InterpolateAndDither(float* alpha255,	u32 x, u32 y, u32 sx, u32 sy, u32 size, int dither[16][16] )
++IC bool		InterpolateAndDither(float* alpha255,	u32 x, u32 y, u32 sx, u32 sy, u32 size, int dither[16][16], float fx, float fy )
+ {
+ 	clamp 	(x,(u32)0,size-1);
+ 	clamp 	(y,(u32)0,size-1);
+-	int		c	= iFloor(Interpolate(alpha255,x,y,size)+.5f);
++	int		c	= iFloor(Interpolate(alpha255,fx,fy)+.5f);
+ 	clamp   (c,0,255);
+ 
+ 	u32	row	= (y+sy) % 16;
+@@ -105,6 +103,40 @@
+ 
+ 	if (0==triCount)	return;
+ 
++#ifndef _EDITOR
++	// Triangle metadata and geometry are invariant within this detail slot.
++	// Cache them once instead of fetching materials/sectors per grass instance.
++	struct PreparedDetailTriangle
++	{
++		u8 kind = 0; // 0: usable, 1: passable, 2: foreign sector
++		Fvector v[3];
++	};
++	static thread_local xr_vector<PreparedDetailTriangle> preparedTriangles;
++	preparedTriangles.resize(triCount);
++	const auto* triangleHits = xrc.r_begin();
++	const auto* outdoorSector = RImplementation.pOutdoorSector;
++	for (u32 tid = 0; tid < triCount; ++tid)
++	{
++		PreparedDetailTriangle& prepared = preparedTriangles[tid];
++		const CDB::TRI& T = tris[triangleHits[tid].id];
++		SGameMtl* material = GMLib.GetMaterialByIdx(T.material);
++		if (material->Flags.test(SGameMtl::flPassable))
++		{
++			prepared.kind = 1;
++			continue;
++		}
++		if (outdoorSector && (CSector*)RImplementation.getSector(T.sector) != outdoorSector)
++		{
++			prepared.kind = 2;
++			continue;
++		}
++		prepared.kind = 0;
++		prepared.v[0] = verts[T.verts[0]];
++		prepared.v[1] = verts[T.verts[1]];
++		prepared.v[2] = verts[T.verts[2]];
++	}
++#endif
++
+ 	// Build shading table
+ 	float		alpha255	[dm_obj_in_slot][4];
+ 	for (int i=0; i<dm_obj_in_slot; i++)
+@@ -144,14 +176,22 @@
+ 			u32 shift_x =  8;
+ 			u32 shift_z =  8;
+ #endif
+-			// Iterpolate and dither palette
++			// Reuse the same clamped interpolation weights in all four channels.
++			u32 interpolation_x = x;
++			u32 interpolation_z = z;
++			clamp(interpolation_x, u32(0), d_size - 1);
++			clamp(interpolation_z, u32(0), d_size - 1);
++			const float fx = float(interpolation_x) / float(d_size);
++			const float fy = float(interpolation_z) / float(d_size);
++
++			// Interpolate and dither palette
+ 			selected.clear();
+ 
+ #ifndef		DBG_SWITCHOFF_RANDOMIZE
+-			if ((DS.id0!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[0],x,z,shift_x,shift_z,d_size,dither))	selected.push_back(0);
+-			if ((DS.id1!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[1],x,z,shift_x,shift_z,d_size,dither))	selected.push_back(1);
+-			if ((DS.id2!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[2],x,z,shift_x,shift_z,d_size,dither))	selected.push_back(2);
+-			if ((DS.id3!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[3],x,z,shift_x,shift_z,d_size,dither))	selected.push_back(3);
++			if ((DS.id0!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[0],x,z,shift_x,shift_z,d_size,dither,fx,fy))	selected.push_back(0);
++			if ((DS.id1!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[1],x,z,shift_x,shift_z,d_size,dither,fx,fy))	selected.push_back(1);
++			if ((DS.id2!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[2],x,z,shift_x,shift_z,d_size,dither,fx,fy))	selected.push_back(2);
++			if ((DS.id3!=DetailSlot::ID_Empty)&& InterpolateAndDither(alpha255[3],x,z,shift_x,shift_z,d_size,dither,fx,fy))	selected.push_back(3);
+ #else
+ 			if ((DS.id0!=DetailSlot::ID_Empty))	selected.push_back(0);
+ 			if ((DS.id1!=DetailSlot::ID_Empty))	selected.push_back(1);
+@@ -211,31 +251,21 @@
+ 					}
+ 				}
+ #else
+-				CDB::TRI&	T		= tris[xrc.r_begin()[tid].id];
+-				SGameMtl* mtl		= GMLib.GetMaterialByIdx(T.material);
+-
+-				if(mtl->Flags.test(SGameMtl::flPassable))	
++				PreparedDetailTriangle& prepared = preparedTriangles[tid];
++				if (prepared.kind == 1)
+ 					continue;
+-
+-				//Detect sector
+-				if(RImplementation.pOutdoorSector)
++				if (prepared.kind == 2)
+ 				{
+-					CSector* sector = (CSector*)RImplementation.getSector(T.sector);
+-					if (sector != RImplementation.pOutdoorSector)
+-					{
+-						no_push = true;
+-						break;
+-					}
++					no_push = true;
++					break;
+ 				}
+-
+-				Fvector		Tv[3]	= { verts[T.verts[0]],verts[T.verts[1]],verts[T.verts[2]] };
+-				if (CDB::TestRayTri(Item_P,dir,Tv,r_u,r_v,r_range,TRUE))
++				if (CDB::TestRayTri(Item_P,dir,prepared.v,r_u,r_v,r_range,TRUE))
+ 				{
+ 					if (r_range>=0)	{
+ 						float y_test	= Item_P.y - r_range;
+ 						if (y_test>y)	y = y_test;
+ 					}
+-					normal.mknormal(verts[T.verts[0]], verts[T.verts[1]], verts[T.verts[2]]);
++					normal.mknormal(prepared.v[0], prepared.v[1], prepared.v[2]);
+ 					break;
+ 				}
+ #endif
+diff --git a/src/xrEngine/AI/game_graph.cpp b/src/xrEngine/AI/game_graph.cpp
+--- a/src/xrEngine/AI/game_graph.cpp
++++ b/src/xrEngine/AI/game_graph.cpp
+@@ -84,17 +84,20 @@
+ 	thread_local	xr_map<u32, float>					TempCostSoFar;
+ 
+ 	TempPriorityNode.clear();
++	if (TempPriorityNode.capacity() < 128)
++		TempPriorityNode.reserve(128);
+ 	TempCameFrom.clear();
+ 	TempCostSoFar.clear();
+ 	OutPath.clear();
+ 
+ 	u32 FromID = start_vertex_id;
+ 	u32 ToID = dest_vertex_id;
+ 		
+ 	if (FromID == ToID)
+ 	{
+ 		OutPath.push_back(start_vertex_id);
+ 		return true;
+ 	}
++	const CVertex* targetVertex = vertex(ToID);
+ 		
+ 	TempPriorityNode.push_back({0.f, FromID});
+@@ -119,6 +122,7 @@
+ 		}
+ 		
+ 		const CVertex* Node = vertex(CurrentNodeID);
++		const float currentCost = TempCostSoFar.find(CurrentNodeID)->second;
+ 
+ 		IGameGraph::const_iterator	i,e;
+ 		begin		(CurrentNodeID,i,e);
+@@ -132,11 +136,11 @@
+ 			MaxIterationCount--;
+ 
+ 			const CVertex* Neighbor = vertex(NeighborID);
+-			float NewCost = TempCostSoFar[CurrentNodeID] + CalcCost(Node, Neighbor,i);
++			float NewCost = currentCost + CalcCost(Node, Neighbor,i);
+ 			auto TempCostSoFarIterator = TempCostSoFar.find(NeighborID);
+ 			if ((TempCostSoFarIterator != TempCostSoFar.end() &&TempCostSoFarIterator->second > NewCost)|| (TempCostSoFarIterator == TempCostSoFar.end() &&MaxVisitedNodeCount > TempCostSoFar.size()))
+ 			{
+-				const float Distance = DistanceNode(vertex(ToID), Neighbor);
++				const float Distance = DistanceNode(targetVertex, Neighbor);
+ 				if(Distance>MaxRange)
+ 				{
+ 					continue;
+@@ -197,6 +201,8 @@
+ 	thread_local	xr_map<u32, float>					TempCostSoFar;
+ 
+ 	TempPriorityNode.clear();
++	if (TempPriorityNode.capacity() < 128)
++		TempPriorityNode.reserve(128);
+ 	TempCameFrom.clear();
+ 	TempCostSoFar.clear();
+ 
+@@ -219,6 +225,7 @@
+ 		}
+ 		
+ 		const CVertex* Node = vertex(CurrentNodeID);
++		const float currentCost = TempCostSoFar.find(CurrentNodeID)->second;
+ 
+ 		const_iterator	i,e;
+ 		begin		(CurrentNodeID,i,e);
+@@ -230,7 +237,7 @@
+ 
+ 
+ 			const CVertex* Neighbor = vertex(NeighborID);
+-			float NewCost = TempCostSoFar[CurrentNodeID] + CalcCost(Node, Neighbor,i);
++			float NewCost = currentCost + CalcCost(Node, Neighbor,i);
+ 			auto TempCostSoFarIterator = TempCostSoFar.find(NeighborID);
+ 			if ((TempCostSoFarIterator != TempCostSoFar.end() &&TempCostSoFarIterator->second > NewCost)|| (TempCostSoFarIterator == TempCostSoFar.end()))
+ 			{

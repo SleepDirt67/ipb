@@ -1,0 +1,95 @@
+diff --git a/src/xrGame/Actor_Movement.cpp b/src/xrGame/Actor_Movement.cpp
+--- a/src/xrGame/Actor_Movement.cpp
++++ b/src/xrGame/Actor_Movement.cpp
+@@ -252,9 +252,9 @@
+ 			mstate_real&=~mcSprint;
+ 		if (!(mstate_real & mcAnyMove) ||
+ 			(mstate_real & mcFwd && mstate_real & mcBack) ||
+ 			(mstate_real & mcLStrafe && mstate_real & mcRStrafe) ||
+-			mstate_real & (mcCrouch | mcClimb) ||
++			mstate_real & mcClimb ||
+-			!isActorAccelerated(mstate_wf, IsZoomAimingMode())) {
++			(!(mstate_real & mcCrouch) && !isActorAccelerated(mstate_wf, IsZoomAimingMode()))) {
+ 			mstate_real &= ~mcSprint;
+ 			// Temporary sprint restrictions must not erase held intent.
+ 		}
+diff --git a/src/xrGame/ActorAnimation.cpp b/src/xrGame/ActorAnimation.cpp
+--- a/src/xrGame/ActorAnimation.cpp
++++ b/src/xrGame/ActorAnimation.cpp
+@@ -429,7 +429,8 @@
+ 		is_standing = false;
+ 	}
+ 
+-	if(mstate_rl&mcSprint)
++	// Retain crouch-run leg and torso animations during crouched sprint.
++	if((mstate_rl & mcSprint) && !(mstate_rl & mcCrouch))
+ 	{
+ 		g_SetSprintAnimation			(mstate_rl,M_head,M_torso,M_legs);
+ 		moving_idx						= STorsoWpn::eSprint;
+diff --git a/src/xrGame/HudItem.cpp b/src/xrGame/HudItem.cpp
+--- a/src/xrGame/HudItem.cpp
++++ b/src/xrGame/HudItem.cpp
+@@ -647,7 +647,8 @@
+ 		if (CActor* pActor = object().H_Parent() != nullptr ? object().H_Parent()->cast_actor() : nullptr)
+ 		{
+ 			u32 state = pActor->GetMovementState(eReal);
+-			if (state & ACTOR_DEFS::EMoveCommand::mcSprint)
++			// Do not play upright sprint weapon animations during crouched sprint.
++			if ((state & ACTOR_DEFS::EMoveCommand::mcSprint) && !(state & ACTOR_DEFS::EMoveCommand::mcCrouch))
+ 			{
+ 				if (!m_bSwitchSprint && m_eAnimationsFlags.test(EAnimationsFlags::af_sprint_in_out))
+ 				{
+@@ -966,7 +967,9 @@
+ 		return true;
+ 	}
+ 
+-	if (pActor->GetMovementState(ACTOR_DEFS::EMovementStates::eReal) & ACTOR_DEFS::EMoveCommand::mcSprint || m_bSwitchSprint)
++	const u32 movement_state = pActor->GetMovementState(ACTOR_DEFS::EMovementStates::eReal);
++	if (((movement_state & ACTOR_DEFS::EMoveCommand::mcSprint) &&
++	    !(movement_state & ACTOR_DEFS::EMoveCommand::mcCrouch)) || m_bSwitchSprint)
+ 	{
+ 		return false;
+ 	}
+diff --git a/src/xrGame/Weapon.cpp b/src/xrGame/Weapon.cpp
+--- a/src/xrGame/Weapon.cpp
++++ b/src/xrGame/Weapon.cpp
+@@ -2732,7 +2732,10 @@
+ 		result = pDevice->IsHidden() && !pDevice->NeedActivation() || !!(state == CCustomDevice::eIdle || state == CCustomDevice::EDeviceStates::eHandAimStart || state == CCustomDevice::EDeviceStates::eHandAimEnd);
+ 	}
+ 
+-	if (m_eAnimationsFlags.test(EAnimationsFlags::af_sprint_in_out) && (pActor->GetMovementState(ACTOR_DEFS::EMovementStates::eReal) & ACTOR_DEFS::EMoveCommand::mcSprint || GetState() == eSprintStart || GetState() == eSprintEnd || m_bSwitchSprint))
++	const u32 movement_state = pActor->GetMovementState(ACTOR_DEFS::EMovementStates::eReal);
++	const bool upright_sprint = (movement_state & ACTOR_DEFS::EMoveCommand::mcSprint) &&
++	    !(movement_state & ACTOR_DEFS::EMoveCommand::mcCrouch);
++	if (m_eAnimationsFlags.test(EAnimationsFlags::af_sprint_in_out) && (upright_sprint || GetState() == eSprintStart || GetState() == eSprintEnd || m_bSwitchSprint))
+ 	{
+ 		result = false;
+ 	}
+diff --git a/src/xrGame/HUDTarget.cpp b/src/xrGame/HUDTarget.cpp
+--- a/src/xrGame/HUDTarget.cpp
++++ b/src/xrGame/HUDTarget.cpp
+@@ -173,7 +173,10 @@
+ 	if (!Actor)
+ 		return;
+ 
+-	bool get_motions = Actor->active_cam() == eacLookAt && ((Actor->GetMovementState(eReal) & ACTOR_DEFS::EMoveCommand::mcSprint) || (Actor->GetMovementState(eReal) & ACTOR_DEFS::EMoveCommand::mcJumpSeq));
++	const u32 movement_state = Actor->GetMovementState(eReal);
++	bool get_motions = Actor->active_cam() == eacLookAt &&
++	    (((movement_state & ACTOR_DEFS::EMoveCommand::mcSprint) && !(movement_state & ACTOR_DEFS::EMoveCommand::mcCrouch)) ||
++	     (movement_state & ACTOR_DEFS::EMoveCommand::mcJumpSeq));
+ 
+ 	if (get_motions)
+ 		return;
+diff --git a/src/xrGame/EffectorBobbing.cpp b/src/xrGame/EffectorBobbing.cpp
+--- a/src/xrGame/EffectorBobbing.cpp
++++ b/src/xrGame/EffectorBobbing.cpp
+@@ -123,7 +123,8 @@
+ {
+     float amp_tmp = 0.0f, freq_tmp = 0.0f;
+ 
+-    if ((mstate & mcSprint) > 0)
++    // Crouch sprint should not use upright sprint bobbing.
++    if ((mstate & mcSprint) > 0 && (mstate & mcCrouch) == 0)
+     {
+         amp_tmp = Sprint.Amplitude.Default;
+         freq_tmp = Sprint.Speed.Default;

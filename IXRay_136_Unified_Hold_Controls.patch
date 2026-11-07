@@ -1,0 +1,139 @@
+diff --git a/src/xrEngine/Xr_input.cpp b/src/xrEngine/Xr_input.cpp
+--- a/src/xrEngine/Xr_input.cpp
++++ b/src/xrEngine/Xr_input.cpp
+@@ -1,7 +1,8 @@
+ #include "stdafx.h"
+ 
+ 
+-#include "xr_input.h"
++#include "xr_input.h"
++#include "xr_level_controller.h"
+ #include "IInputReceiver.h"
+ 
+ CInput *	pInput	= nullptr;
+@@ -353,8 +354,6 @@
+ 	return true;
+ }
+ 
+-#define MOUSE_1		(SDL_SCANCODE_COUNT + 100)
+-#define MOUSE_8		(SDL_SCANCODE_COUNT + 107)
+ 
+ BOOL CInput::iGetAsyncKeyState( int dik )
+ {
+diff --git a/src/xrGame/ActorInput.cpp b/src/xrGame/ActorInput.cpp
+--- a/src/xrGame/ActorInput.cpp
++++ b/src/xrGame/ActorInput.cpp
+@@ -100,11 +100,9 @@
+ 		{
+ 			mstate_wishful |= mcJump;
+ 		}break;
+-	case kSPRINT_TOGGLE:	
+-		{
+-			if (Holder() == nullptr)
+-			mstate_wishful ^= mcSprint;
+-		}break;
++	case kSPRINT_TOGGLE:	
++		// Physical sprint intent is sampled during each movement update.
++		break;
+ 	case kCROUCH:	
+ 		{
+ 		if( psActorFlags.test(AF_CROUCH_TOGGLE) )
+@@ -598,7 +596,7 @@
+ 	return ((key1 != 0) && IsKeyPressed(key1)) || ((key2 != 0) && IsKeyPressed(key2));
+ }
+ 
+-static bool IsActionKeyPressedInGame(const EGameActions& EGameAction)
++bool IsActionKeyPressedInGame(const EGameActions& EGameAction)
+ {
+ 	return IsActionKeyPressed(EGameAction) && !Console->bVisible && CurrentGameUI() != nullptr && !CurrentGameUI()->TopInputReceiver() && g_pGameLevel && g_pGameLevel->Cameras().GetCamEffector(cefDemo) == nullptr && !load_screen_renderer.IsActive() && !CImGuiManager::Instance().IsCapturingInputs();
+ }
+diff --git a/src/xrGame/Actor_Movement.cpp b/src/xrGame/Actor_Movement.cpp
+--- a/src/xrGame/Actor_Movement.cpp
++++ b/src/xrGame/Actor_Movement.cpp
+@@ -4,7 +4,10 @@
+ #include "Inventory.h"
+ #include "Weapon.h"
+ #include "../xrEngine/CameraBase.h"
+-#include "xrMessages.h"
++#include "xrMessages.h"
++#include "../xrEngine/xr_level_controller.h"
++
++extern bool IsActionKeyPressedInGame(const EGameActions& action);
+ 
+ #include "Level.h"
+ #include "UIGameCustom.h"
+@@ -150,8 +153,17 @@
+ 	}
+ };
+ 
+-void CActor::g_cl_CheckControls(u32 mstate_wf, Fvector &vControlAccel, float &Jump, float dt)
+-{
++void CActor::g_cl_CheckControls(u32 mstate_wf, Fvector &vControlAccel, float &Jump, float dt)
++{
++	// Re-read the physically held sprint binding on every movement update.
++	if (IsActionKeyPressedInGame(kSPRINT_TOGGLE))
++		mstate_wishful |= mcSprint;
++	else
++		mstate_wishful &= ~mcSprint;
++
++	// Synchronize the already-captured state for this frame.
++	mstate_wf = (mstate_wf & ~mcSprint) | (mstate_wishful & mcSprint);
++
+ 	mstate_old				= mstate_real;
+ 	vControlAccel.set		(0,0,0);
+ 
+@@ -250,13 +262,13 @@
+ 			mstate_real|=mcSprint;
+ 		else
+ 			mstate_real&=~mcSprint;
+-		if (!(mstate_real & (mcFwd | mcLStrafe | mcRStrafe)) ||
++		if (!(mstate_real & mcAnyMove) ||
+ 			(mstate_real & mcFwd && mstate_real & mcBack) ||
+ 			(mstate_real & mcLStrafe && mstate_real & mcRStrafe) ||
+ 			mstate_real & (mcCrouch | mcClimb) ||
+ 			!isActorAccelerated(mstate_wf, IsZoomAimingMode())) {
+ 			mstate_real &= ~mcSprint;
+-			mstate_wishful &= ~mcSprint;
++			// Temporary sprint restrictions must not erase held intent.
+ 		}
+ 				
+ 		// check player move state
+@@ -265,7 +277,7 @@
+ 			BOOL	bAccelerated		= isActorAccelerated(mstate_real, IsZoomAimingMode())&&CanAccelerate();
+ 
+ 			// correct "mstate_real" if opposite keys pressed
+-			if (_abs(vControlAccel.z)<EPS)	mstate_real &= ~(mcFwd + mcBack + mcSprint);
++			if (_abs(vControlAccel.z)<EPS)	mstate_real &= ~(mcFwd + mcBack);
+ 			if (_abs(vControlAccel.x)<EPS)	mstate_real &= ~(mcLStrafe+mcRStrafe);
+ 
+ 			// normalize and analyze crouch and run
+@@ -682,7 +694,7 @@
+ bool CActor::CanSprint()
+ {
+ 	bool is_animator = (HudAnimator() && (HudAnimator()->IsActive() && HudAnimator()->CanSprint() || !HudAnimator()->IsActive()) || !HudAnimator());
+-	bool can_Sprint = CanAccelerate() && !conditions().IsCantSprint() && Game().PlayerCanSprint(this) && CanRun() && !(mstate_real & mcLStrafe || mstate_real & mcRStrafe) && InventoryAllowSprint() && !bBlockSprint && is_animator;
++	bool can_Sprint = CanAccelerate() && !conditions().IsCantSprint() && Game().PlayerCanSprint(this) && CanRun() && InventoryAllowSprint() && !bBlockSprint && is_animator;
+ 
+ 	return can_Sprint && (m_block_sprint_counter<=0);
+ }
+diff --git a/src/xrEngine/xr_level_controller.cpp b/src/xrEngine/xr_level_controller.cpp
+--- a/src/xrEngine/xr_level_controller.cpp
++++ b/src/xrEngine/xr_level_controller.cpp
+@@ -433,15 +433,13 @@
+ 
+ void remap_keys()
+ {
+ 	int idx = 0;
+-	string128 buff;
+ 	while (keyboards[idx].key_name)
+ 	{
+-		buff[0] = 0;
+ 		_keyboard& kb = keyboards[idx];
++		// Display the original Latin key names, regardless of keyboard layout.
++		// Do not alter get_dik_name(): text input still needs localization.
+-		bool res = pInput->get_dik_name(kb.dik, buff, sizeof(buff));
+-		kb.key_local_name = res ? buff : kb.key_local_name;
+ 
+ 		if (kb.key_local_name.starts_with('k'))
+ 		{
+ 			kb.key_local_name = kb.key_local_name.substr(1);

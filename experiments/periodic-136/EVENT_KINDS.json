@@ -1,0 +1,17 @@
+{
+  "1": "OnIdle",
+  "2": "Render",
+  "3": "Present",
+  "4": "WaitWorkers",
+  "5": "PreRender",
+  "6": "Discord",
+  "7": "SceneRender",
+  "8": "Gamma",
+  "9": "Occlusion",
+  "10": "Pump",
+  "11": "Reset",
+  "12": "SyncPaint",
+  "13": "FrameState",
+  "14": "BeginRender",
+  "15": "SyncFailure"
+}

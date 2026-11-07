@@ -108,7 +108,7 @@ def summarize(directory):
         previous = start, segment
     presentmon = directory / "presentmon.csv"
     if presentmon.is_file():
-        _, present_join = join_presents(presentmon, pid, presents, hz)
+        _, present_join = join_presents(presentmon, pid, [event for event, _ in presents], hz)
     else:
         present_join = None
     return {

@@ -47,7 +47,7 @@ $session = 'IXRayAuto_' + [guid]::NewGuid().ToString('N')
 $started = [DateTime]::UtcNow
 $issues = New-Object 'System.Collections.Generic.List[string]'
 $metadata = [ordered]@{
-    schema = 1; mode = 'SpawnPath'; resource_mode = 'Both'; binary_commit = $manifest.commit
+    schema = 1; mode = 'SpawnPath'; resource_mode = 'Both'; lua_line_profile = $false; binary_commit = $manifest.commit
     diagnostic_commit = $manifest.commit
     start_utc = $started.ToString('o'); qpc_frequency = [Diagnostics.Stopwatch]::Frequency
     launch_qpc = $null; exit_qpc = $null; pid = $null; game_exit_code = $null
@@ -57,6 +57,7 @@ $metadata = [ordered]@{
 $env:IXRAY_AUDIO_WARMUP = '1'
 $env:IXRAY_SCRIPT_INI_CACHE = '1'
 $env:IXRAY_SPAWN_PATH = '1'
+$env:IXRAY_SPAWN_LUA = '0'
 $env:IXRAY_PACING = '1'
 $env:IXRAY_PACING_DEEP = '0'
 $env:IXRAY_PACING_PIXELS = '1'

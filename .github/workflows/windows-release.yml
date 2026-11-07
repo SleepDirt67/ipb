@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn path capture
+name: IX-Ray Windows x64 spawn preparation
 on:
   push:
     branches: [main, 'experiment/**']
@@ -292,6 +292,8 @@ jobs:
         run: |
           python experiments/periodic-136/shader-warmup/apply.py
           if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm overlay failed' }
+          python ci/spawn-preparation/shaders.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'PDA shader preparation failed' }
           cmake -S experiments/periodic-136/shader-warmup -B checks/shader-warmup -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
           if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture configure failed' }
           cmake --build checks/shader-warmup --config Release --parallel 4
@@ -322,6 +324,14 @@ jobs:
       - name: Instrument the PR20 spawn path
         run: python ci/spawn-path/apply.py ixray
 
+      - name: Prepare the traced audio and Lua paths
+        shell: pwsh
+        run: |
+          python ci/spawn/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Stock conditions overlay failed' }
+          python ci/spawn-preparation/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn preparation overlay failed' }
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -344,6 +354,18 @@ jobs:
           Copy-Item -LiteralPath $dll -Destination checks/gameplay-stalls/Release/
           & checks/gameplay-stalls/Release/ixray_gameplay_stalls.exe | Tee-Object checks/GAMEPLAY_STALLS_DIFFERENTIAL.txt
           if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls differential fixture failed' }
+
+      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
+          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
+          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
+          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
 
       - name: Compare prepared audio metadata using the exact Windows Vorbis DLL
         shell: pwsh
@@ -396,11 +418,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Spawn path QA compile failed' }
           $env:IXRAY_PACING_DIR = (Resolve-Path checks/spawn-path).Path
           Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') checks/spawn-path/Release/
+          $env:IXRAY_SPAWN_LUA = '1'
           & checks/spawn-path/Release/spawn_profile_fixture.exe | Tee-Object checks/SPAWN_PATH_LUA_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows LuaJIT sampling fixture failed' }
           $capture = Get-ChildItem checks/spawn-path -Filter 'ixray_spawn_lua_*.tsv' -File
           if ($capture.Count -ne 1 -or -not (Select-String -LiteralPath $capture.FullName -Pattern 'spawn_path_fixture.script' -Quiet)) { throw 'Fixture stack dump missing' }
           Remove-Item Env:IXRAY_PACING_DIR
+          Remove-Item Env:IXRAY_SPAWN_LUA
           & checks/spawn-path/Release/ixray_etw_decode.exe --self-test
           if ($LASTEXITCODE -ne 0) { throw 'ETW decoder fixture failed' }
           wpr.exe -profiles ci/spawn-path/capture/IXRayCpuStacks.wprp
@@ -434,7 +458,7 @@ jobs:
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
       - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
@@ -449,6 +473,10 @@ jobs:
         run: |
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_audit_core_test.exe | Tee-Object checks/PUBLIC_ACTUAL_CORE.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore fixture failed' }
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_plan_fixture.exe | Tee-Object checks/SPAWN_PLAN_NATIVE.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_voice_catalog.exe | Tee-Object checks/SPAWN_VOICE_CATALOG_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore voice catalogue differential failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
           python ci/package.py
@@ -462,7 +490,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Spawn-Path-Windows-x64
+          name: IXRay-1.3.6-Spawn-Preparation-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

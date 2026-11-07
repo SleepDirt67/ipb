@@ -23,17 +23,17 @@ edit('src/xrScripts/script_storage.cpp', '#include "script_process.h"', '''#incl
 namespace
 {
 #include "PreparedStockLogic.inc"
+#include "PreparedStockGoap.inc"
 
-std::string_view PrepareStockLogic(LPCSTR name, std::string_view data)
+template <size_t OriginalSize, size_t PreparedSize>
+std::string_view MatchStockScript(std::string_view data, const unsigned char (&original)[OriginalSize],
+    const unsigned char (&prepared)[PreparedSize])
 {
-    if (!name || xr_strcmp(name, "xr_logic") != 0)
-        return {};
-
     static const bool enabled = [] {
         const auto* setting = std::getenv("IXRAY_SPAWN_PLANS");
         return !setting || xr_strcmp(setting, "0") != 0;
     }();
-    if (!enabled || data.size() < sizeof(stockLogic) || data.size() > 2 * sizeof(stockLogic))
+    if (!enabled || data.size() < OriginalSize || data.size() > 2 * OriginalSize)
         return {};
 
     size_t index = 0;
@@ -41,12 +41,21 @@ std::string_view PrepareStockLogic(LPCSTR name, std::string_view data)
     {
         if (data[offset] == '\\r' && offset + 1 < data.size() && data[offset + 1] == '\\n')
             continue;
-        if (index == sizeof(stockLogic) || static_cast<unsigned char>(data[offset]) != stockLogic[index++])
+        if (index == OriginalSize || static_cast<unsigned char>(data[offset]) != original[index++])
             return {};
     }
-    if (index != sizeof(stockLogic))
+    if (index != OriginalSize)
         return {};
-    return {reinterpret_cast<const char*>(preparedStockLogic), sizeof(preparedStockLogic)};
+    return {reinterpret_cast<const char*>(prepared), PreparedSize};
+}
+
+std::string_view PrepareStockSpawnScript(LPCSTR name, std::string_view data)
+{
+    if (name && xr_strcmp(name, "xr_logic") == 0)
+        return MatchStockScript(data, stockLogic, preparedStockLogic);
+    if (name && xr_strcmp(name, "state_mgr_goap") == 0)
+        return MatchStockScript(data, stockGoap, preparedStockGoap);
+    return {};
 }
 }''')
 
@@ -54,10 +63,10 @@ edit('src/xrScripts/script_storage.cpp',
      '        loaded = load_buffer(lua(), static_cast<LPCSTR>(l_tpFileReader->pointer()), (size_t)l_tpFileReader->length(), caNameSpaceName, caNameSpaceName);',
      '''        const std::string_view original(static_cast<LPCSTR>(l_tpFileReader->pointer()),
             static_cast<size_t>(l_tpFileReader->length()));
-        const auto prepared = PrepareStockLogic(caNameSpaceName, original);
+        const auto prepared = PrepareStockSpawnScript(caNameSpaceName, original);
         const auto source = prepared.empty() ? original : prepared;
         if (!prepared.empty())
-            Msg("* xr_logic: prepared stock condition programs");
+            Msg("* %s: prepared stock spawn script", caNameSpaceName);
         loaded = load_buffer(lua(), source.data(), source.size(), caNameSpaceName, caNameSpaceName);''')
 
 edit('src/xrScripts/exports/script_ini_file_script.cpp', '#include "script_ini_file.h"',
@@ -84,13 +93,22 @@ edit('src/xrScripts/exports/script_ini_file_script.cpp',
             .def("ixray_next_switch_key", &next_switch_key, out_value<6>())''')
 
 
+edit('src/xrGame/action_base_script.cpp', '#include "script_game_object.h"',
+     '#include "script_game_object.h"\n#include "script_world_property.h"\n#include "SpawnGoapRules.h"')
+edit('src/xrGame/action_base_script.cpp', '\n\t];\n}', '\n\t];\n    spawn_goap::register_rules<CScriptActionBase, CScriptWorldProperty>(L);\n}')
+
 fixture_root = Path(__file__).resolve().parent
 target_dir = root / 'src/xrScripts/exports'
+(root / 'src/xrGame/SpawnGoapRules.h').write_bytes((fixture_root / 'SpawnGoapRules.h').read_bytes())
 (target_dir / 'SpawnSwitchKeys.h').write_bytes((fixture_root / 'SpawnSwitchKeys.h').read_bytes())
+(root / 'ixray_spawn_goap_fixture.cpp').write_bytes((fixture_root / 'goap_fixture.cpp').read_bytes())
 (root / 'ixray_spawn_plan_fixture.cpp').write_bytes((fixture_root / 'native_fixture.cpp').read_bytes())
 with (root / 'CMakeLists.txt').open('a', encoding='utf-8') as cmake:
     cmake.write("""
 add_executable(ixray_spawn_plan_fixture ixray_spawn_plan_fixture.cpp)
 target_include_directories(ixray_spawn_plan_fixture PRIVATE src/xrCore src/xrScripts/exports)
 target_link_libraries(ixray_spawn_plan_fixture PRIVATE xrCore)
+add_executable(ixray_spawn_goap_fixture ixray_spawn_goap_fixture.cpp)
+target_include_directories(ixray_spawn_goap_fixture PRIVATE src/xrGame)
+target_link_libraries(ixray_spawn_goap_fixture PRIVATE luabind)
 """)

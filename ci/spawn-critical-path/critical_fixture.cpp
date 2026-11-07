@@ -90,8 +90,12 @@ static void TestPackedView()
     Require(original && replacement);
     auto* write = static_cast<unsigned char*>(MapViewOfFile(original, FILE_MAP_WRITE, 0, 0, 65536));
     Require(write != nullptr);
-    PackedWaveView read;
-    Require(read.Open(original, 0, 65536));
+    SoundWavePreparation::PackedWaveRegistry registry;
+    auto view = registry.Prepare(original, 0, 65536);
+    Require(view != nullptr);
+    Require(view == registry.Prepare(original, 0, 65536));
+    std::weak_ptr<const PackedWaveView> weak = view;
+    const auto& read = *view;
     Require(read.MatchesSection(original));
     Require(!read.MatchesSection(replacement));
     Require(!read.MatchesSection(nullptr));
@@ -101,10 +105,14 @@ static void TestPackedView()
     Require(*read.Bytes(230, 1) == 42);
     write[230] = 71;
     Require(*read.Bytes(230, 1) == 71);
+    registry.CloseSection(original);
+    Require(!weak.expired());
+    view.reset();
+    Require(weak.expired());
     UnmapViewOfFile(write);
     CloseHandle(original);
     CloseHandle(replacement);
-    std::cout << "PASS: packed data mutation, bounds, and exact mounted section identity\n";
+    std::cout << "PASS: packed mutation, bounds, section identity, and unmount retirement\n";
 }
 #endif
 

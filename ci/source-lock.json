@@ -1,6 +1,6 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
-  ".github/workflows/windows-release.yml": "f69f520c29fe9de805f3dde07050baa819f3178905590a9495b0527300354fb8",
+  ".github/workflows/windows-release.yml": "9936b4eb454c78e6c0bbbe409d5aebd327634e79f0520f6375cd65f842659ec7",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -33,6 +33,8 @@
   "ci/spawn-coverage/audio.py": "61996fbb5e5b8c9e0a64e68d95671ee346fa3a1c7c19ad0df5daecb6b18628b4",
   "ci/spawn-coverage/fragment_fixture.cpp": "570e64b91a993f121b922e954eb0a82027aa932d4a48efd0847808ee9bcbf512",
   "ci/spawn-coverage/lua.py": "898ea7afededfbfce4bd7a6887330c6cf1dfd8489b4b94d1e9ca50e4ba10950f",
+  "ci/spawn-critical/prepare_model_bases.py": "1d6bb0e0055278d5cd23ee86d279d19b3ce448cfed61b9209a045fc9579c9d70",
+  "ci/spawn-critical/prepare_smart_jobs.py": "f811909b3b5354a45c76cd681bcf6f6d8bf29c1320ac0703eb0a1b1d9a9a73d9",
   "ci/spawn-mainline/SpawnVoiceApply.inc": "529a79a3c6c4085d3ba681b674e4f466e05577f08ade12eb1106c0796693c8b8",
   "ci/spawn-mainline/SpawnVoiceBindings.h": "6b13af5880d214eabc235e04ac6459b087c9c0e3a48e18539501925db1689f05",
   "ci/spawn-mainline/SpawnVoiceCatalogue.h": "8a8a3d1670a2c5bbe277a1cd830065b65797ab73eb6c306d801d2914b23d2c32",

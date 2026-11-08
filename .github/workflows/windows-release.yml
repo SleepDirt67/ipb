@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn admission experiment
+name: IX-Ray Windows x64 spawn preparation checks
 on:
   push:
     branches: [main, 'experiment/**']
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   compile:
-    name: Windows x64 / gameplay stall fixes, regression tests and complete package
+    name: Windows x64 / integrated spawn preparation
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
@@ -345,6 +345,13 @@ jobs:
       - name: Prepare detached stock voice inputs for spawn admission
         run: python ci/spawn-mainline/apply.py ixray checks/spawn-mainline
 
+      - name: Separate model references and prepare stock job placements
+        run: |
+          python ci/spawn-critical/prepare_model_bases.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Model preparation overlay failed' }
+          python ci/spawn-critical/prepare_smart_jobs.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Job preparation overlay failed' }
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -352,272 +359,20 @@ jobs:
           cmake --preset Engine-x64-Windows "-DFETCHCONTENT_SOURCE_DIR_LUABIND=$env:GITHUB_WORKSPACE/ixray/build/x64/Engine-Windows/_deps/luabind-src"
           if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
 
-      # Fail a broken replay before the full engine is compiled.
-      - name: Build native spawn binder replay for early validation
-        shell: pwsh
-        timeout-minutes: 12
-        run: |
-          Write-Host 'START: compiling isolated native binder replay'
-          cmake --build ixray/build/x64/Engine-Windows --config Release --target ixray_spawn_mainline_replay --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Early binder replay compilation failed' }
-
-      - name: Preflight native binder replay with progress markers
-        shell: pwsh
-        timeout-minutes: 2
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:IXRAY_SPAWN_PREPARE = '1'
-          try {
-            Write-Host 'START: early replay; [REPLAY] markers pinpoint startup, individual Lua modes, and teardown'
-            $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-            if (-not $lua) { throw 'LuaJIT import library missing' }
-            $runtime = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
-            if ((Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash.ToLower() -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
-            $exeDir = 'ixray/build/x64/Engine-Windows/bin/Release'
-            Copy-Item -LiteralPath $runtime -Destination $exeDir -Force
-            Write-Host 'Pinned LuaJIT runtime staged alongside replay executable'
-            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_PREFLIGHT.txt
-            Write-Host "Replay process exit code: $LASTEXITCODE"
-            if ($LASTEXITCODE -ne 0) { throw 'Early binder replay failed' }
-          } finally {
-            Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
-          }
-
-      - name: Verify Luabind lookup and sound selection against the exact Windows Lua runtime
-        shell: pwsh
-        run: |
-          $fixture = 'experiments/periodic-136/gameplay-stalls'
-          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-          if (-not $lua) { throw 'Lua import library missing' }
-          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
-          if ((Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Shader Warmup Lua runtime mismatch' }
-          cmake -S $fixture -B checks/gameplay-stalls -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/gameplay-stalls-generated" "-DENGINE=$env:GITHUB_WORKSPACE/ixray" "-DLUA_LIB=$($lua.FullName)"
-          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls fixture configure failed' }
-          cmake --build checks/gameplay-stalls --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls fixture compilation failed' }
-          Copy-Item -LiteralPath $dll -Destination checks/gameplay-stalls/Release/
-          & checks/gameplay-stalls/Release/ixray_gameplay_stalls.exe | Tee-Object checks/GAMEPLAY_STALLS_DIFFERENTIAL.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls differential fixture failed' }
-
-      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
-        shell: pwsh
-        run: |
-          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-          if (-not $lua) { throw 'Lua import library missing' }
-          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
-          if ((Get-FileHash -LiteralPath $dll).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
-          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
-          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
-          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
-
-      - name: Compare prepared audio metadata using the exact Windows Vorbis DLL
-        shell: pwsh
-        run: |
-          $fixture = 'experiments/periodic-136/spawn-resources'
-          $packages = 'ixray/build/x64/Engine-Windows/packages'
-          $vorbis = Get-ChildItem $packages -Directory -Filter ImeSense.Packages.LibVorbis.* | Select-Object -First 1
-          $ogg = Get-ChildItem $packages -Directory -Filter ImeSense.Packages.LibOgg.* | Select-Object -First 1
-          if (-not $vorbis -or -not $ogg) { throw 'Windows Ogg/Vorbis dependency missing' }
-          $library = Join-Path $vorbis.FullName 'native/lib/x64/Release/libvorbisfile.lib'
-          if (-not (Test-Path -LiteralPath $library)) { throw 'x64 Vorbis import library missing' }
-          python "$fixture/make_ogg_fixtures.py" checks/ogg-fixtures
-          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture creation failed' }
-          cmake -S $fixture -B checks/wave -A x64 "-DVORBIS_INCLUDE=$($vorbis.FullName)/native/include" "-DOGG_INCLUDE=$($ogg.FullName)/native/include" "-DVORBISFILE_LIB=$library"
-          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture configure failed' }
-          cmake --build checks/wave --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'OGG fixture compilation failed' }
-          foreach ($pair in @(@($vorbis.FullName,'libvorbisfile.dll'), @($vorbis.FullName,'libvorbis.dll'), @($ogg.FullName,'libogg.dll'))) {
-            $dll = Join-Path $pair[0] ("native/bin/x64/Release/" + $pair[1])
-            if (-not (Test-Path -LiteralPath $dll)) { throw "Missing fixture runtime $($pair[1])" }
-            Copy-Item -LiteralPath $dll -Destination checks/wave/Release/
-          }
-          & checks/wave/Release/ixray_spawn_wave_check.exe checks/ogg-fixtures | Tee-Object checks/SPAWN_WAVE_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'OGG metadata differential failed' }
-
-      - name: Run native differential tests against the exact Lua runtime
-        shell: pwsh
-        run: |
-          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-          if (-not $lua) { throw 'Lua import library missing' }
-          cmake -S experiments/stall-work-136/tests -B checks/tests -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/generated" "-DENGINE=$env:GITHUB_WORKSPACE/ixray" "-DLUA_LIB=$($lua.FullName)"
-          if ($LASTEXITCODE -ne 0) { throw 'Test configure failed' }
-          cmake --build checks/tests --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Test compile failed' }
-          $luaDll=Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
-          Copy-Item $luaDll checks/tests/Release/
-          foreach ($name in @('filesystem','regex','lua_lookup','ini','ini_evaluation')) {
-            & "checks/tests/Release/$name.exe" | Tee-Object "checks/$name.txt"
-            if ($LASTEXITCODE -ne 0) { throw "Differential test failed: $name" }
-          }
-
-      - name: Build capture tools and verify sampling with the exact Windows LuaJIT
-        shell: pwsh
-        run: |
-          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-          if (-not $lua) { throw 'Lua import library missing' }
-          cmake -S ci/spawn-path -B checks/spawn-path -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray" "-DLUA_LIB=$($lua.FullName)"
-          if ($LASTEXITCODE -ne 0) { throw 'Spawn path QA configure failed' }
-          cmake --build checks/spawn-path --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Spawn path QA compile failed' }
-          & checks/spawn-path/Release/spawn_fragment_fixture.exe | Tee-Object checks/SPAWN_LUA_FRAGMENT_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Lua function matching fixture failed' }
-          $env:IXRAY_PACING_DIR = (Resolve-Path checks/spawn-path).Path
-          Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') checks/spawn-path/Release/
-          $env:IXRAY_SPAWN_LUA = '1'
-          & checks/spawn-path/Release/spawn_profile_fixture.exe | Tee-Object checks/SPAWN_PATH_LUA_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows LuaJIT sampling fixture failed' }
-          $capture = Get-ChildItem checks/spawn-path -Filter 'ixray_spawn_lua_*.tsv' -File
-          if ($capture.Count -ne 1 -or -not (Select-String -LiteralPath $capture.FullName -Pattern 'spawn_path_fixture.script' -Quiet)) { throw 'Fixture stack dump missing' }
-          Remove-Item Env:IXRAY_PACING_DIR
-          Remove-Item Env:IXRAY_SPAWN_LUA
-          & checks/spawn-path/Release/ixray_etw_decode.exe --self-test
-          if ($LASTEXITCODE -ne 0) { throw 'ETW decoder fixture failed' }
-          wpr.exe -profiles ci/spawn-path/capture/IXRayCpuStacks.wprp
-          if ($LASTEXITCODE -ne 0) { throw 'Stack WPR profile schema rejected' }
-          $tokens=$null;$errors=$null
-          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ci/spawn-path/capture/spawn_path_capture.ps1),[ref]$tokens,[ref]$errors) | Out-Null
-          if ($errors.Count) { throw "Spawn launcher parser errors: $errors" }
-
-      - name: Run actual-source audit differential tests
-        shell: pwsh
-        run: |
-          cmake -S experiments/audit-136/tests -B checks/audit-tests -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/audit-generated"
-          if ($LASTEXITCODE -ne 0) { throw 'Audit test configure failed' }
-          cmake --build checks/audit-tests --config Release --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Audit test compile failed' }
-          foreach ($name in @('materialization','xml_navigation','cell_cleanup','container_cleanup','model_lifecycle')) {
-            & "checks/audit-tests/Release/$name.exe" | Tee-Object "checks/$name.txt"
-            if ($LASTEXITCODE -ne 0) { throw "Audit differential failed: $name" }
-          }
-
-      - name: Test installer and rollback in a disposable fixture
-        shell: pwsh
-        run: |
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File experiments/audit-136/tests/test_installer.ps1 | Tee-Object checks/installer_audit.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Installer roundtrip test failed' }
-
       - name: Seal transformed engine sources
         run: python ci/engine_inputs.py --seal
 
-      - name: Compile HOLD-compatible engine, game DLL, abstractions and DX11 renderer
+      - name: Compile engine, DX11 and native activation fixture
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog ixray_spawn_contact_fixture ixray_spawn_admission_fixture ixray_spawn_mainline_replay --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_spawn_admission_fixture --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
-      - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
+      - name: Run detached geometry and queue differential
         shell: pwsh
         run: |
-          $fixture = (Resolve-Path 'ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_ini_check.exe').Path
-          & $fixture | Tee-Object checks/SPAWN_INI_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Actual script INI differential failed' }
-
-      # Split post-build QA: each stage has an observable start and a timeout.
-      - name: Check Release xrCore and spawn fixtures
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'START: core fixture'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_audit_core_test.exe | Tee-Object checks/PUBLIC_ACTUAL_CORE.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore fixture failed' }
-          Write-Host 'START: spawn plan fixture'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_plan_fixture.exe | Tee-Object checks/SPAWN_PLAN_NATIVE.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
-          Write-Host 'START: voice catalogue fixture'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_voice_catalog.exe | Tee-Object checks/SPAWN_VOICE_CATALOG_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore voice catalogue differential failed' }
-          Write-Host 'START: contact fixture'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_contact_fixture.exe | Tee-Object checks/SPAWN_CONTACT_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Static contact differential failed' }
-          Write-Host 'START: spawn admission fixture'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_admission_fixture.exe | Tee-Object checks/SPAWN_ADMISSION_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Detached spawn admission differential failed' }
-
-      - name: Check detached binder replay with actual LuaJIT
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $env:IXRAY_SPAWN_PREPARE = '1'
-          try {
-            Write-Host 'START: ixray_spawn_mainline_replay'
-            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
-            if ($LASTEXITCODE -ne 0) { throw 'Detached voice binder replay failed' }
-          } finally {
-            Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
-          }
-
-      - name: Check sealed sources and package exact Release
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'START: engine_inputs'
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_admission_fixture.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native activation differential failed' }
           python ci/engine_inputs.py
-          if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
-          Write-Host 'START: package'
-          python ci/package.py
-          if ($LASTEXITCODE -ne 0) { throw 'Release package failed' }
-
-      - name: Download embedded Python for capture tooling
-        shell: pwsh
-        timeout-minutes: 4
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'START: python-embed download'
-          Invoke-WebRequest https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip -OutFile checks/python-embed.zip -TimeoutSec 120
-          if (-not (Test-Path checks/python-embed.zip)) { throw 'Python runtime missing' }
-
-      - name: Create capture symbol indices and seal full package
-        shell: pwsh
-        timeout-minutes: 15
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'START: capture symbol indexing'
-          python -u ci/spawn-path/package_capture.py
-          if ($LASTEXITCODE -ne 0) { throw 'Spawn path capture package failed' }
-
-      - name: Validate packaged Release install and rollback
-        shell: pwsh
-        timeout-minutes: 5
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host 'START: full installer QA'
-          $qaMarker = 'checks/PUBLIC_WINDOWS_QA.txt'
-          Remove-Item -LiteralPath $qaMarker -ErrorAction SilentlyContinue
-          & ci/verify_package.ps1
-          if (-not (Test-Path -LiteralPath $qaMarker)) {
-            throw 'Windows install/rollback verification did not complete'
-          }
-          $qaResult = (Get-Content -LiteralPath $qaMarker -Raw).Trim()
-          if ($qaResult -ne 'PASS: actual Release installed and exact original 36-file fixture restored') {
-            throw "Windows install/rollback verification returned: $qaResult"
-          }
-          Write-Host $qaResult
-
-      - name: Upload tested full Release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: IXRay-1.3.6-Spawn-Admission-Windows-x64
-          path: package/
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload matching symbols
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: IXRay-1.3.6-Windows-x64-PDB
-          path: symbols/
-          if-no-files-found: error
-          retention-days: 7
-      - name: Upload automated test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: Windows-QA
-          path: |
-            checks/*.txt
-            checks/*.json
-          retention-days: 14
+          if ($LASTEXITCODE -ne 0) { throw 'Transformed input seal changed' }

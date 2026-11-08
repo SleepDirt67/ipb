@@ -113,7 +113,9 @@ static int WithSpawn(lua_State* L)
 static void Register(lua_State* L)
 {
     using namespace luabind;
+    std::fprintf(stderr, "[REGISTER] before luabind::open\n");
     open(L);
+    std::fprintf(stderr, "[REGISTER] after luabind::open; before module classes\n");
     module(L)[
         class_<ReplaySoundTypes>("snd_type")
             .enum_("sound_types")[value("talk", int(SOUND_TYPE_TALKING))],
@@ -133,9 +135,15 @@ static void Register(lua_State* L)
             .def("add_combat_sound", &CScriptGameObject::add_combat_sound)
             .def("other_add_sound", &CScriptGameObject::scripted_add_sound)
     ];
+    std::fprintf(stderr, "[REGISTER] after module classes\n");
     static constexpr const char* methods[] = {"exist", "sound_variant_count"};
+    std::fprintf(stderr, "[REGISTER] before FS Capture\n");
     SpawnVoice::Capture(L, SpawnVoice::fsKey, "FS", methods, std::size(methods));
+    std::fprintf(stderr, "[REGISTER] after FS Capture\n");
+    std::fprintf(stderr, "[REGISTER] before RegisterNativeApply\n");
     SpawnVoice::RegisterNativeApply(L);
+    std::fprintf(stderr, "[REGISTER] after RegisterNativeApply\n");
+    std::fprintf(stderr, "[REGISTER] before with_spawn\n");
     lua_pushcfunction(L, WithSpawn);
     lua_setglobal(L, "with_spawn");
 }
@@ -152,10 +160,17 @@ struct Result
 static Result Replay(const char* voice, const char* input, const char* mode)
 {
     std::fprintf(stderr, "[REPLAY] start variant=%s input=%s\n", mode, voice);
+    std::fprintf(stderr, "[REPLAY] before luaL_newstate\n");
     auto* L = luaL_newstate();
+    std::fprintf(stderr, "[REPLAY] after luaL_newstate\n");
     Require(L != nullptr, "Lua state");
+    std::fprintf(stderr, "[REPLAY] before luaL_openlibs\n");
     luaL_openlibs(L);
+    std::fprintf(stderr, "[REPLAY] after luaL_openlibs\n");
+    std::fprintf(stderr, "[REPLAY] before Register\n");
     Register(L);
+    std::fprintf(stderr, "[REPLAY] after Register\n");
+    std::fprintf(stderr, "[REPLAY] before Load(stock input)\n");
     Load(L, input, true);
     std::fprintf(stderr, "[REPLAY] input loaded variant=%s\n", mode);
     lua_pushstring(L, voice);

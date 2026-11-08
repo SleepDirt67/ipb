@@ -363,7 +363,7 @@ jobs:
 
       - name: Preflight native binder replay with progress markers
         shell: pwsh
-        timeout-minutes: 5
+        timeout-minutes: 2
         run: |
           $ErrorActionPreference = 'Stop'
           $env:IXRAY_SPAWN_PREPARE = '1'

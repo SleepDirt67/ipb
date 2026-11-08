@@ -85,14 +85,17 @@ edit(physics, "tri-colliderknoopc/dSortTriPrimitive.h", [
 ])
 
 edit(game, "Level.h", [
-    ("class\tCSE_Abstract;", "class\tCSE_Abstract;\nclass CSE_ALifeDynamicObject;\n"
+    ("class\tCSE_Abstract;", "class\tCSE_Abstract;\nclass CSE_ALifeDynamicObject;\nclass CALifeLevelRegistry;\n"
      "namespace SpawnPreparation { class ActivationWork; }"),
     ("\tNET_Queue_Event\t\t\t\t*game_events;",
      """    SpawnPreparation::ActivationWork* spawnActivationWork = nullptr;
     bool spawnActivationWorkInitialized = false;
+    u16 spawnPreparationCursor = u16(-1);
 
 \tNET_Queue_Event\t\t\t\t*game_events;"""),
-    ("\tvoid\t\t\t\t\t\tcl_Process_Spawn", """    void PrepareALifeSpawn(const CSE_ALifeDynamicObject& object);
+    ("\tvoid\t\t\t\t\t\tcl_Process_Spawn", """    bool PrepareALifeSpawn(const CSE_ALifeDynamicObject& object, bool speculative = false);
+    void PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
+        const Fvector& actorPosition, float onlineDistance);
 
 \tvoid\t\t\t\t\t\tcl_Process_Spawn"""),
 ])
@@ -117,6 +120,7 @@ edit(game, "Level_network.cpp", [
 edit(game, "Level_network_spawn.cpp", [
     ('#include "patrol_path_params.h"', '''#include "patrol_path_params.h"
 #include "entity_alive.h"
+#include "alife_level_registry.h"
 #include "../xrPhysics/SpawnActivationWork.h"
 #include "SpawnAdmission.inc"'''),
     ("        spawnSucceeded = O->net_Spawn(E);", """        auto* alive = spawnActivationWork ? smart_cast<CEntityAlive*>(O) : nullptr;
@@ -134,8 +138,8 @@ edit(game, "alife_online_offline_group.cpp", [
     ('#include "alife_simulator.h"', '#include "alife_simulator.h"\n#include "Level.h"'),
     ("\tMEMBERS::iterator\t\t\tI = m_members.begin();\n\tMEMBERS::iterator\t\t\tE = m_members.end();\n\tfor ( ; I != E; ++I){\n\t\talife().add_online",
      """    if (g_pGameLevel)
-        for (const auto& [id, member] : m_members)
-            Level().PrepareALifeSpawn(*member);
+        for (const auto& entry : m_members)
+            Level().PrepareALifeSpawn(*entry.second);
 
 \tMEMBERS::iterator\t\t\tI = m_members.begin();
 \tMEMBERS::iterator\t\t\tE = m_members.end();
@@ -150,3 +154,13 @@ with (root / "CMakeLists.txt").open("a", encoding="utf-8") as build:
 add_executable(ixray_spawn_admission_fixture ixray_spawn_admission_fixture.cpp)
 target_link_libraries(ixray_spawn_admission_fixture PRIVATE xrCore)
 """)
+
+
+edit(game, "alife_update_manager.cpp", [
+    ('#include "alife_simulator_header.h"',
+     '#include "alife_simulator_header.h"\n#include "xrServer_Objects_ALife_Monsters.h"'),
+    ("\tupdate_scheduled(false);",
+     "\tupdate_scheduled(false);\n"
+     "    if (!m_changing_level && g_pGameLevel && graph().actor())\n"
+     "        Level().PrepareOfflineALifeSpawns(graph().level(), graph().actor()->o_Position, online_distance());"),
+])

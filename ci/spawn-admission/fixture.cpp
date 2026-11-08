@@ -65,6 +65,37 @@ void CheckQueue()
     Require(!queue.Take(1) && !queue.Take(2), "at most one take and no retired result");
 }
 
+void CheckLookahead()
+{
+    std::promise<void> entered;
+    std::promise<void> released;
+    auto release = released.get_future().share();
+    std::array<unsigned, 3> execution{};
+    unsigned executed = 0;
+    const auto prepare = [&](const unsigned& value) -> std::optional<unsigned> {
+        if (value == 11)
+        {
+            entered.set_value();
+            release.wait();
+        }
+        execution[executed++] = value;
+        return value;
+    };
+    Queue<unsigned, unsigned, decltype(prepare), 3> queue(prepare);
+    WaitFor([&] { return queue.Submit(1, 11, true); }, "lookahead starts");
+    Require(entered.get_future().wait_for(3s) == std::future_status::ready, "lookahead worker entered");
+    WaitFor([&] { return queue.Submit(2, 22, true); }, "pending lookahead");
+    WaitFor([&] { return queue.Submit(3, 33, true); }, "second pending lookahead");
+    WaitFor([&] { return queue.Submit(1, 111); }, "new announced pose retires running lookahead");
+    released.set_value();
+    Require(*WaitFor([&] { return queue.Take(1); }, "announced pose available") == 111,
+        "superseded running pose never publishes");
+    Require(*WaitFor([&] { return queue.Take(3); }, "unrelated lookahead still available") == 33,
+        "newest unrelated lookahead survived capacity limit");
+    Require(!queue.Take(2) && execution == std::array<unsigned, 3>{11, 111, 33},
+        "announced work precedes and displaces lookahead");
+}
+
 bool Same(float a, float b)
 {
     return std::bit_cast<unsigned>(a) == std::bit_cast<unsigned>(b);
@@ -145,6 +176,7 @@ int main()
 {
     Core._initialize("spawn-admission-fixture", nullptr, FALSE, nullptr);
     CheckQueue();
+    CheckLookahead();
     CheckGeometry();
     Core._destroy();
     std::puts("PASS: detached CDB differential, deadline miss, cancellation, ID reuse and queue ownership");

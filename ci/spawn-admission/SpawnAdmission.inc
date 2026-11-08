@@ -1,15 +1,15 @@
 // Producer-side hints only. The live packet and live physics inputs are
 // authoritative. Custom Lua can choose any other position or box.
-void CLevel::PrepareALifeSpawn(const CSE_ALifeDynamicObject& object)
+bool CLevel::PrepareALifeSpawn(const CSE_ALifeDynamicObject& object, bool speculative)
 {
     if (!spawnActivationWork || IsDemoPlay() || IsDemoSave() || object.ID_Parent != u16(-1) ||
         !smart_cast<const CSE_ALifeHumanStalker*>(&object))
-        return;
+        return false;
 
     const auto* section = *object.s_name;
     if (!pSettings->line_exist(section, "ph_box0_center") ||
         !pSettings->line_exist(section, "ph_box0_size"))
-        return;
+        return false;
 
     const Fvector boxCenter = pSettings->r_fvector3(section, "ph_box0_center");
     const Fvector boxSize = pSettings->r_fvector3(section, "ph_box0_size");
@@ -42,5 +42,47 @@ void CLevel::PrepareALifeSpawn(const CSE_ALifeDynamicObject& object)
         }
         add(graph->vertex_position(node));
     }
-    SpawnPreparation::SubmitActivation(spawnActivationWork, object.ID, centers, count, halfSize);
+    SpawnPreparation::SubmitActivation(spawnActivationWork, object.ID, centers, count, halfSize, speculative);
+    return true;
+}
+
+void CLevel::PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
+    const Fvector& actorPosition, float onlineDistance)
+{
+    if (!spawnActivationWork || IsDemoPlay() || IsDemoSave())
+        return;
+    const auto& objects = registry.objects();
+    auto candidate = objects.upper_bound(spawnPreparationCursor);
+    unsigned requests = 0;
+    const auto scanCount = std::min<std::size_t>(objects.size(), 32);
+    constexpr float anticipationDistance = 12.f;
+    const float limit = onlineDistance + anticipationDistance;
+    for (std::size_t scanned = 0; scanned < scanCount && requests < 4; ++scanned, ++candidate)
+    {
+        if (candidate == objects.end())
+            candidate = objects.begin();
+        const auto& [id, object] = *candidate;
+        spawnPreparationCursor = id;
+        if (object->m_bOnline || object->ID_Parent != u16(-1))
+            continue;
+        const float distance = actorPosition.distance_to_sqr(object->o_Position);
+        if (distance > limit * limit)
+            continue;
+        if (const auto* group = smart_cast<const CSE_ALifeOnlineOfflineGroup*>(object))
+        {
+            unsigned examined = 0;
+            for (const auto& entry : group->squad_members())
+            {
+                const auto* member = entry.second;
+                if (++examined > 8)
+                    break;
+                if (!member->m_bOnline && PrepareALifeSpawn(*member, true))
+                    ++requests;
+                if (requests == 4)
+                    break;
+            }
+        }
+        else if (PrepareALifeSpawn(*object, true))
+            ++requests;
+    }
 }

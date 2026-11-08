@@ -21,6 +21,7 @@ class Queue
         State state = State::Empty;
         std::uint16_t object = 0;
         std::uint64_t sequence = 0;
+        bool speculative = false;
         std::optional<Input> input;
         std::optional<Output> output;
     };
@@ -41,7 +42,8 @@ class Queue
             Slot* pending = nullptr;
             for (auto& slot : slots_)
                 if (slot.state == State::Pending &&
-                    (!pending || slot.sequence < pending->sequence))
+                    (!pending || (pending->speculative && !slot.speculative) ||
+                     (pending->speculative == slot.speculative && slot.sequence < pending->sequence)))
                     pending = &slot;
             if (!pending)
             {
@@ -49,8 +51,7 @@ class Queue
                 continue;
             }
             pending->state = State::Running;
-            auto input = std::move(*pending->input);
-            pending->input.reset();
+            const auto input = *pending->input;
             lock.unlock();
             auto result = prepare_(input);
             lock.lock();
@@ -59,6 +60,8 @@ class Queue
             if (pending->state != State::Retired)
                 pending->output = std::move(result);
             pending->state = pending->output ? State::Ready : State::Empty;
+            if (pending->state == State::Empty)
+                pending->input.reset();
         }
     }
 
@@ -75,27 +78,49 @@ public:
         thread_.join();
     }
 
-    bool Submit(std::uint16_t object, const Input& input)
+    bool Submit(std::uint16_t object, const Input& input, bool speculative = false)
     {
         std::unique_lock lock(mutex_, std::try_to_lock);
         if (!lock.owns_lock())
             return false;
         Slot* empty = nullptr;
         Slot* oldestReady = nullptr;
+        Slot* oldestSpeculative = nullptr;
         for (auto& slot : slots_)
         {
-            if (slot.state != State::Empty && slot.object == object)
-                return false;
+            if (slot.state != State::Empty && slot.state != State::Retired && slot.object == object)
+            {
+                if (speculative || *slot.input == input)
+                {
+                    if (!speculative)
+                        slot.speculative = false;
+                    return false;
+                }
+                // The actual producer may see a different position from
+                // lookahead. Drop the stale generation before scheduling it.
+                slot.input.reset();
+                slot.output.reset();
+                slot.state = slot.state == State::Running ? State::Retired : State::Empty;
+            }
             if (slot.state == State::Empty && !empty)
                 empty = &slot;
-            if (slot.state == State::Ready &&
+            if (slot.state == State::Ready && !speculative &&
                 (!oldestReady || slot.sequence < oldestReady->sequence))
                 oldestReady = &slot;
+            if (slot.speculative &&
+                (slot.state == State::Pending || slot.state == State::Ready) &&
+                (!oldestSpeculative || slot.sequence < oldestSpeculative->sequence))
+                oldestSpeculative = &slot;
         }
-        auto* slot = empty ? empty : oldestReady;
+        // Lookahead never displaces announced work. Announced work can
+        // reclaim any lookahead slot that is outside the worker.
+        auto* slot = empty ? empty : oldestSpeculative;
+        if (!slot)
+            slot = oldestReady;
         if (!slot)
             return false;
         slot->object = object;
+        slot->speculative = speculative;
         slot->sequence = ++sequence_;
         slot->output.reset();
         slot->input = input;
@@ -112,12 +137,13 @@ public:
             return {};
         for (auto& slot : slots_)
         {
-            if (slot.state == State::Empty || slot.object != object)
+            if (slot.state == State::Empty || slot.state == State::Retired || slot.object != object)
                 continue;
             if (slot.state == State::Ready)
             {
                 auto result = std::move(slot.output);
                 slot.output.reset();
+                slot.input.reset();
                 slot.state = State::Empty;
                 return result;
             }
@@ -133,12 +159,11 @@ public:
             return;
         for (auto& slot : slots_)
         {
-            if (slot.state == State::Empty || slot.object != object)
+            if (slot.state == State::Empty || slot.state == State::Retired || slot.object != object)
                 continue;
             slot.input.reset();
             slot.output.reset();
-            slot.state = slot.state == State::Running || slot.state == State::Retired
-                ? State::Retired : State::Empty;
+            slot.state = slot.state == State::Running ? State::Retired : State::Empty;
             return;
         }
     }

@@ -20,6 +20,19 @@ struct Inputs
     unsigned count;
     unsigned fpMode;
     u16 object = 0;
+
+    bool operator==(const Inputs& other) const
+    {
+        if (model != other.model || count != other.count ||
+            (fpMode & 0xffc0u) != (other.fpMode & 0xffc0u) ||
+            std::bit_cast<unsigned>(expansion) != std::bit_cast<unsigned>(other.expansion) ||
+            std::memcmp(&halfSize.x, &other.halfSize.x, 3 * sizeof(float)))
+            return false;
+        for (unsigned i = 0; i < count; ++i)
+            if (std::memcmp(&centers[i].x, &other.centers[i].x, 3 * sizeof(float)))
+                return false;
+        return true;
+    }
 };
 
 struct Pose

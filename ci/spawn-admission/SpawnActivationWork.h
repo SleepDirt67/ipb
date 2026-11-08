@@ -11,7 +11,7 @@ struct ActivationResult;
 XRPHYSICS_API ActivationWork* StartActivationWork(const CDB::MODEL* model);
 XRPHYSICS_API void StopActivationWork(ActivationWork*& work);
 XRPHYSICS_API void SubmitActivation(ActivationWork* work, u16 object,
-    const Fvector* centers, unsigned count, const Fvector& halfSize);
+    const Fvector* centers, unsigned count, const Fvector& halfSize, bool speculative);
 
 // Binds a detached result to the exact client object. Nested dispatch
 // restores the outer owner, including on a miss or unsupported spawn.

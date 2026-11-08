@@ -21,8 +21,11 @@ class ActivationWork
 {
 public:
     const CDB::MODEL* model;
+    const float expansion;
     Queue<Inputs, std::unique_ptr<ActivationResult>, decltype(&Prepare)> queue;
-    explicit ActivationWork(const CDB::MODEL* source) : model(source), queue(&Prepare) {}
+
+    ActivationWork(const CDB::MODEL* source, float queryExpansion)
+        : model(source), expansion(queryExpansion), queue(&Prepare) {}
 };
 
 ActivationWork* StartActivationWork(const CDB::MODEL* model)
@@ -33,7 +36,7 @@ ActivationWork* StartActivationWork(const CDB::MODEL* model)
     {
         try
         {
-            return new ActivationWork(model);
+            return new ActivationWork(model, ph_console::ph_tri_query_ex_aabb_rate);
         }
         catch (const std::system_error&)
         {
@@ -58,23 +61,23 @@ void StopActivationWork(ActivationWork*& work)
 }
 
 void SubmitActivation(ActivationWork* work, u16 id, const Fvector* centers, unsigned count,
-    const Fvector& halfSize)
+    const Fvector& halfSize, bool speculative)
 {
 #if defined(_M_X64) && !defined(DEBUG)
     if (!work || count == 0 || count > maxPoses || !_valid(halfSize) ||
         halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f ||
         halfSize.x > 5.f || halfSize.y > 5.f || halfSize.z > 5.f)
         return;
-    Inputs input{work->model, {}, halfSize, ph_console::ph_tri_query_ex_aabb_rate, count, _mm_getcsr(), id};
+    Inputs input{work->model, {}, halfSize, work->expansion, count, _mm_getcsr(), id};
     for (unsigned i = 0; i < count; ++i)
     {
         if (!_valid(centers[i]))
             return;
         input.centers[i] = centers[i];
     }
-    if (work->queue.Submit(id, input))
+    if (work->queue.Submit(id, input, speculative))
     {
-        PacingDiag::SpawnSpan accepted(PacingDiag::Kind::SpawnPrepareSubmit, id);
+        PacingDiag::SpawnSpan accepted(PacingDiag::Kind::SpawnPrepareSubmit, id | (speculative ? 1u << 16 : 0u));
     }
 #endif
 }

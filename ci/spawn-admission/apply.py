@@ -25,6 +25,12 @@ for name in ("SpawnPreparationQueue.h", "SpawnActivationWork.h", "ActivationGeom
     shutil.copyfile(source / name, physics / name)
 shutil.copyfile(source / "SpawnAdmission.inc", game / "SpawnAdmission.inc")
 
+edit(engine / "xrEngine", "PacingDiagnostics.h", [
+    ("OtherGameEvent, SpawnPublish, ALifeSwitchOnline",
+     "OtherGameEvent, SpawnPublish, ALifeSwitchOnline,\n"
+     "        SpawnPrepareSubmit, SpawnPrepareWorker, SpawnPrepareUse, SpawnPrepareMiss"),
+])
+
 edit(physics, "SpawnActivationContacts.h", [
     ('#include "ActivationCollisionPlan.h"', '#include "ActivationCollisionPlan.h"\n#include "SpawnActivationWork.h"'),
     ("class Scope\n{", """} // namespace SpawnCollision

@@ -1,6 +1,7 @@
 // Included once, by IActivationShape.cpp.
 #include "SpawnPreparationQueue.h"
 #include "SpawnPreparedGeometry.h"
+#include "../xrEngine/PacingDiagnostics.h"
 
 namespace SpawnPreparation
 {
@@ -8,7 +9,11 @@ namespace
 {
 using Geometry::Inputs;
 using Geometry::maxPoses;
-using Geometry::PrepareGeometry;
+auto Prepare(const Inputs& input)
+{
+    PacingDiag::SpawnSpan span(PacingDiag::Kind::SpawnPrepareWorker, input.object);
+    return Geometry::PrepareGeometry(input);
+}
 thread_local ActivationScope* currentActivation = nullptr;
 }
 
@@ -16,8 +21,8 @@ class ActivationWork
 {
 public:
     const CDB::MODEL* model;
-    Queue<Inputs, std::unique_ptr<ActivationResult>, decltype(&PrepareGeometry)> queue;
-    explicit ActivationWork(const CDB::MODEL* source) : model(source), queue(&PrepareGeometry) {}
+    Queue<Inputs, std::unique_ptr<ActivationResult>, decltype(&Prepare)> queue;
+    explicit ActivationWork(const CDB::MODEL* source) : model(source), queue(&Prepare) {}
 };
 
 ActivationWork* StartActivationWork(const CDB::MODEL* model)
@@ -57,16 +62,20 @@ void SubmitActivation(ActivationWork* work, u16 id, const Fvector* centers, unsi
 {
 #if defined(_M_X64) && !defined(DEBUG)
     if (!work || count == 0 || count > maxPoses || !_valid(halfSize) ||
-        halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f)
+        halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f ||
+        halfSize.x > 5.f || halfSize.y > 5.f || halfSize.z > 5.f)
         return;
-    Inputs input{work->model, {}, halfSize, ph_console::ph_tri_query_ex_aabb_rate, count, _mm_getcsr()};
+    Inputs input{work->model, {}, halfSize, ph_console::ph_tri_query_ex_aabb_rate, count, _mm_getcsr(), id};
     for (unsigned i = 0; i < count; ++i)
     {
         if (!_valid(centers[i]))
             return;
         input.centers[i] = centers[i];
     }
-    work->queue.Submit(id, input);
+    if (work->queue.Submit(id, input))
+    {
+        PacingDiag::SpawnSpan accepted(PacingDiag::Kind::SpawnPrepareSubmit, id);
+    }
 #endif
 }
 
@@ -93,6 +102,10 @@ ActivationResult* ActivationScope::For(const IPhysicsShellHolder* owner)
         return result;
     if (auto result = scope->work_->queue.Take(scope->id_))
         scope->prepared_ = result->release();
+    else
+    {
+        PacingDiag::SpawnSpan miss(PacingDiag::Kind::SpawnPrepareMiss, scope->id_);
+    }
     return scope->prepared_;
 }
 
@@ -102,6 +115,10 @@ SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB
 {
     auto* pose = Geometry::Match(result, model, center, halfSize, queryExtent, fpMode);
     matched = pose != nullptr;
+    if (!result)
+        return nullptr;
+    PacingDiag::SpawnSpan selection(pose ? PacingDiag::Kind::SpawnPrepareUse :
+        PacingDiag::Kind::SpawnPrepareMiss, result->object);
     if (!pose)
         return nullptr;
     ids.assign(pose->ids.begin(), pose->ids.end());

@@ -19,6 +19,7 @@ struct Inputs
     float expansion;
     unsigned count;
     unsigned fpMode;
+    u16 object = 0;
 };
 
 struct Pose
@@ -38,6 +39,7 @@ struct ActivationResult
     unsigned fpMode;
     std::array<Geometry::Pose, Geometry::maxPoses> poses;
     unsigned count = 0;
+    u16 object = 0;
 };
 
 namespace Geometry
@@ -57,6 +59,7 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
     {
         auto result = std::make_unique<ActivationResult>();
         result->model = input.model;
+        result->object = input.object;
         result->fpMode = SpawnCollision::Scope::FloatingPointMode();
         CDB::COLLIDER collider;
         collider.box_options(0);

@@ -56,7 +56,7 @@ for name in ('ci/source-lock.json',):
     ['git', '-C', 'ixray', 'diff', '--binary', '--ignore-space-at-eol']))
 for name in subprocess.check_output(['git', '-C', 'ixray', 'ls-files', '--others',
                                        '--exclude-standard', '-z', 'src',
-                                       'audit_core_integration.cpp', 'ixray_spawn_ini_fixture.cpp', 'ixray_spawn_plan_fixture.cpp', 'ixray_spawn_voice_catalog.cpp']
+                                       'audit_core_integration.cpp', 'ixray_spawn_ini_fixture.cpp', 'ixray_spawn_plan_fixture.cpp', 'ixray_spawn_voice_catalog.cpp', 'ixray_spawn_contact_fixture.cpp']
                                       ).decode().split('\0'):
     if name:
         dest = source / 'added' / name

@@ -17,7 +17,7 @@ def git_paths(*args):
 def engine_inputs():
     paths = git_paths('diff', '--name-only', '-z', upstream)
     paths |= git_paths('ls-files', '--others', '--exclude-standard', '-z', 'src',
-                       'audit_core_integration.cpp', 'ixray_spawn_ini_fixture.cpp', 'ixray_spawn_plan_fixture.cpp', 'ixray_spawn_voice_catalog.cpp')
+                       'audit_core_integration.cpp', 'ixray_spawn_ini_fixture.cpp', 'ixray_spawn_plan_fixture.cpp', 'ixray_spawn_voice_catalog.cpp', 'ixray_spawn_contact_fixture.cpp')
     return {p: digest(engine / p) if (engine / p).is_file() else None for p in sorted(paths)}
 
 

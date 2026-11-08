@@ -65,8 +65,8 @@ void CLevel::PrepareALifeSpawns(const CALifeLevelRegistry& registry,
         spawnPreparationCursor = id;
         if (object->ID_Parent != u16(-1))
             continue;
-        const bool near = actorPosition.distance_to_sqr(object->o_Position) <= limit * limit;
-        if (!near && !object->m_bOnline)
+        const bool withinRange = actorPosition.distance_to_sqr(object->o_Position) <= limit * limit;
+        if (!withinRange && !object->m_bOnline)
             continue;
         if (const auto* group = smart_cast<const CSE_ALifeOnlineOfflineGroup*>(object))
         {
@@ -77,7 +77,7 @@ void CLevel::PrepareALifeSpawns(const CALifeLevelRegistry& registry,
                 if (++examined > 8)
                     break;
                 const bool pending = member->m_bOnline && !Objects.net_Find(member->ID);
-                if ((pending || (near && !member->m_bOnline)) &&
+                if ((pending || (withinRange && !member->m_bOnline)) &&
                     PrepareALifeSpawn(*member, !pending))
                     ++requests;
                 if (requests == 4)
@@ -87,7 +87,7 @@ void CLevel::PrepareALifeSpawns(const CALifeLevelRegistry& registry,
         else
         {
             const bool pending = object->m_bOnline && !Objects.net_Find(object->ID);
-            if ((pending || (near && !object->m_bOnline)) &&
+            if ((pending || (withinRange && !object->m_bOnline)) &&
                 PrepareALifeSpawn(*object, !pending))
                 ++requests;
         }

@@ -151,19 +151,24 @@ struct Result
 
 static Result Replay(const char* voice, const char* input, const char* mode)
 {
+    std::fprintf(stderr, "[REPLAY] start variant=%s input=%s\n", mode, voice);
     auto* L = luaL_newstate();
     Require(L != nullptr, "Lua state");
     luaL_openlibs(L);
     Register(L);
     Load(L, input, true);
+    std::fprintf(stderr, "[REPLAY] input loaded variant=%s\n", mode);
     lua_pushstring(L, voice);
     lua_setglobal(L, "voice_file");
     Load(L, "load_voice_in_namespace(voice_file)", false);
+    std::fprintf(stderr, "[REPLAY] voice loaded variant=%s\n", mode);
     lua_pushstring(L, mode);
     lua_setglobal(L, "replay_mode");
     fsCalls = registrations = 0;
     const auto start = std::chrono::steady_clock::now();
+    std::fprintf(stderr, "[REPLAY] execute variant=%s\n", mode);
     Load(L, "replay_spawn()", false);
+    std::fprintf(stderr, "[REPLAY] returned variant=%s\n", mode);
     const double ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();
     lua_getglobal(L, "replay_result");
@@ -172,6 +177,7 @@ static Result Replay(const char* voice, const char* input, const char* mode)
     lua_getglobal(L, "native_applied");
     result.applied = static_cast<unsigned>(lua_tointeger(L, -1));
     lua_close(L);
+    std::fprintf(stderr, "[REPLAY] state closed variant=%s\n", mode);
     return result;
 }
 
@@ -191,11 +197,15 @@ int main(int argc, char** argv)
         }
     }
 
+    std::fprintf(stderr, "[REPLAY] initializing Core\n");
     Core._initialize("spawn-voice-replay", nullptr, FALSE, nullptr);
+    std::fprintf(stderr, "[REPLAY] Core initialized\n");
     const auto absolute = root.string();
     FS._initialize(CLocatorAPI::flTargetFolderOnly, absolute.c_str(), nullptr);
     FS.append_path("$game_sounds$", absolute.c_str(), nullptr, TRUE);
+    std::fprintf(stderr, "[REPLAY] prepare initial catalogue\n");
     FS.prepare_spawn_voice_catalogue();
+    std::fprintf(stderr, "[REPLAY] catalogue prepared\n");
     admittedPlan = FS.acquire_spawn_voice_catalogue();
     Require(admittedPlan != nullptr, "level voice preparation");
     Require(FS.prepared_spawn_voice_count("CHARACTERS_VOICE\\MODEL\\LINE") == 2, "Lua first hole");
@@ -263,6 +273,8 @@ int main(int argc, char** argv)
         "old admission token cannot use a different VFS generation");
     admittedPlan.reset();
 
+    std::fprintf(stderr, "[REPLAY] tear down Core\n");
     Core._destroy();
+    std::fprintf(stderr, "[REPLAY] Core teardown complete\n");
     std::filesystem::remove_all(root);
 }

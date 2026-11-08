@@ -22,6 +22,14 @@ checks = package / 'checks'
 checks.mkdir()
 source = package / 'source'
 source.mkdir()
+stock_lua = '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c'
+assert digest(out / 'lua51.dll') == stock_lua
+rebuilt_lua = Path('checks/dispatch-lua/bin/Release')
+lua_pdb = list(Path('checks/dispatch-lua').rglob('lua51.pdb'))
+assert len(lua_pdb) == 1, lua_pdb
+shutil.copy2(rebuilt_lua / 'lua51.dll', out / 'lua51.dll')
+shutil.copy2(lua_pdb[0], out / 'lua51.pdb')
+shutil.copy2('ci/spawn-dispatch/luajit-sweep.patch', source / 'luajit-sweep.patch')
 modules, pdbs = [], []
 for path in sorted(out.iterdir()):
     if path.suffix.lower() != '.dll' and path.name != 'xrEngine.exe':
@@ -40,8 +48,8 @@ for path in sorted(out.iterdir()):
         shutil.copy2(pdb, symbol_root / pdb.name)
         pdbs.append({'module': path.name, 'pdb': pdb.name, 'module_sha256': entry['sha256'],
                      'pdb_sha256': digest(pdb), 'guid': guid.hex(), 'age': age})
-assert len(modules) == 36 and len(pdbs) == 11, (len(modules), len(pdbs))
-assert digest(bin_path / 'lua51.dll') == '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c'
+assert len(modules) == 36 and len(pdbs) == 12, (len(modules), len(pdbs))
+assert digest(bin_path / 'lua51.dll') == digest(rebuilt_lua / 'lua51.dll')
 shutil.copy2('LICENSE.md', package / 'LICENSE.md')
 for name in ('INSTALL.cmd', 'RESTORE.cmd', 'RUN_PERFORMANCE.cmd', 'install.ps1', 'restore.ps1',
              'installation_common.ps1', 'run.ps1'):
@@ -74,6 +82,9 @@ manifest = {
     'engine_inputs_sha256': digest(Path('checks/PUBLIC_ENGINE_INPUTS.json')),
     'dependency_commits': dependency_pins,
     'configuration': 'Release', 'architecture': 'x64',
+    'luajit_commit': 'dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268',
+    'luajit_recipe_commit': '02c62d81bc3ab8a46c37efa3c13af3217afa9e08',
+    'original_lua51_sha256': stock_lua,
     'ingame_tested': False, 'modules': modules, 'pe_validation': verify(bin_path),
 }
 (package / 'BUILD_MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
@@ -83,4 +94,4 @@ shutil.copy2(symbol_root / 'SYMBOLS_MANIFEST.json', checks / 'SYMBOLS_MANIFEST.j
 files = sorted(p for p in package.rglob('*') if p.is_file())
 (package / 'SHA256SUMS.txt').write_text(''.join(f'{digest(p)}  {p.relative_to(package).as_posix()}\n' for p in files),
                                        encoding='ascii', newline='\n')
-print(f'Windows x64 Release, 36 modules, 11 exact PDB matches and {len(files)} SHA-256 entries')
+print(f'Windows x64 Release, 36 modules, 12 exact PDB matches and {len(files)} SHA-256 entries')

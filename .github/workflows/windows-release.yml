@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn activation
+name: IX-Ray Windows x64 spawn dispatch sweep
 on:
   push:
     branches: [main, 'experiment/**']
@@ -339,6 +339,44 @@ jobs:
       - name: Stage model loading and reuse immutable activation contacts
         run: python ci/spawn-activation/apply.py ixray
 
+      - name: Pace sweep work across spawn dispatch and regular script maintenance
+        run: python ci/spawn-dispatch/apply.py ixray
+
+      - name: Checkout LuaJIT from the exact IX-Ray package recipe
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: LuaJIT/LuaJIT
+          ref: dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268
+          path: dispatch-lua-src
+          persist-credentials: false
+
+      - name: Checkout the pinned package recipe
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: imesense/packages-collection
+          ref: 02c62d81bc3ab8a46c37efa3c13af3217afa9e08
+          path: dispatch-lua-recipe
+          persist-credentials: false
+
+      - name: Rebuild the matching Lua runtime and run the mixed dispatch replay
+        shell: pwsh
+        run: |
+          $recipe = 'dispatch-lua-recipe/pkg/LuaJIT/LuaJIT/1626960173/patch'
+          $patches = @(Get-ChildItem "$recipe/*.patch" | Sort-Object Name)
+          if ($patches.Count -ne 7) { throw 'Expected the seven pinned package patches' }
+          foreach ($patch in $patches) {
+            git -C dispatch-lua-src apply $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Lua recipe patch failed: $($patch.Name)" }
+          }
+          git -C dispatch-lua-src apply (Resolve-Path ci/spawn-dispatch/luajit-sweep.patch)
+          if ($LASTEXITCODE -ne 0) { throw 'Sweep overlay failed' }
+          cmake -S dispatch-lua-src -B checks/dispatch-lua -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+          if ($LASTEXITCODE -ne 0) { throw 'Lua configure failed' }
+          cmake --build checks/dispatch-lua --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Lua build failed' }
+          python ci/spawn-dispatch/replay.py (Resolve-Path checks/dispatch-lua/bin/Release/lua51.dll) | Tee-Object checks/SPAWN_DISPATCH_SWEEP_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Mixed dispatch replay failed' }
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -490,6 +528,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Static contact differential failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
+          $bin = 'ixray/build/x64/Engine-Windows/bin/Release'
+          $rebuilt = 'checks/dispatch-lua/bin/Release'
+          python ci/spawn-dispatch/verify_runtime.py "$bin/lua51.dll" "$rebuilt/lua51.dll" | Tee-Object checks/SPAWN_DISPATCH_LUA_ABI.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Lua exports differ from the stock Windows runtime' }
           python ci/package.py
           if ($LASTEXITCODE -ne 0) { throw 'Release package failed' }
           Invoke-WebRequest https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip -OutFile checks/python-embed.zip
@@ -501,7 +543,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Spawn-Activation-Windows-x64
+          name: IXRay-1.3.6-Spawn-Dispatch-Sweep-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

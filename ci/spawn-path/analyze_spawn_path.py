@@ -12,6 +12,7 @@ KINDS = {
     19: "game_events", 20: "spawn_event", 32: "spawn_dispatch", 33: "stalker_spawn",
     34: "binder_reload", 35: "binder_reinit", 36: "binder_net_spawn", 37: "sound_collection",
     38: "position", 39: "other_event", 40: "spawn_publish", 41: "alife_switch_online",
+    42: "sweep_yield", 43: "sweep_maintenance", 44: "sweep_quanta",
 }
 
 

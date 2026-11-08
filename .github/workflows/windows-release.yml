@@ -367,7 +367,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $env:IXRAY_SPAWN_PREPARE = '1'
-          $env:IXRAY_DEBUG_LUABIND_OPEN = '1'
           try {
             Write-Host 'START: early replay; [REPLAY] markers pinpoint startup, individual Lua modes, and teardown'
             $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
@@ -382,7 +381,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Early binder replay failed' }
           } finally {
             Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
-            Remove-Item Env:IXRAY_DEBUG_LUABIND_OPEN -ErrorAction SilentlyContinue
           }
 
       - name: Verify Luabind lookup and sound selection against the exact Windows Lua runtime

@@ -8,6 +8,7 @@ extern "C" {
 #include <luabind/luabind.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -157,6 +158,19 @@ struct Result
     unsigned applied;
 };
 
+static void* __cdecl ReplayLuabindAllocator(void*, const void* memory, size_t bytes)
+{
+    // Equivalent realloc/free contract to xrGame::setup_luabind_allocator,
+    // but independent of the game DLL. Luabind's exported allocator is null by default.
+    auto* pointer = const_cast<void*>(memory);
+    if (!bytes)
+    {
+        std::free(pointer);
+        return nullptr;
+    }
+    return std::realloc(pointer, bytes);
+}
+
 static Result Replay(const char* voice, const char* input, const char* mode)
 {
     std::fprintf(stderr, "[REPLAY] start variant=%s input=%s\n", mode, voice);
@@ -214,6 +228,9 @@ int main(int argc, char** argv)
 
     std::fprintf(stderr, "[REPLAY] initializing Core\n");
     Core._initialize("spawn-voice-replay", nullptr, FALSE, nullptr);
+    luabind::allocator = &ReplayLuabindAllocator;
+    luabind::allocator_parameter = nullptr;
+    Require(luabind::allocator != nullptr, "native Luabind allocator installed");
     std::fprintf(stderr, "[REPLAY] Core initialized\n");
     const auto absolute = root.string();
     FS._initialize(CLocatorAPI::flTargetFolderOnly, absolute.c_str(), nullptr);

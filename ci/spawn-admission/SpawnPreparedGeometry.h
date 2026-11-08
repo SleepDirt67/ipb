@@ -20,6 +20,7 @@ struct Inputs
     unsigned count;
     unsigned fpMode;
     u16 object = 0;
+    std::shared_ptr<const void> binder;
 
     bool operator==(const Inputs& other) const
     {
@@ -53,6 +54,7 @@ struct ActivationResult
     std::array<Geometry::Pose, Geometry::maxPoses> poses;
     unsigned count = 0;
     u16 object = 0;
+    std::shared_ptr<const void> binder;
 };
 
 namespace Geometry
@@ -73,6 +75,7 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
         auto result = std::make_unique<ActivationResult>();
         result->model = input.model;
         result->object = input.object;
+        result->binder = input.binder;
         result->fpMode = SpawnCollision::Scope::FloatingPointMode();
         CDB::COLLIDER collider;
         collider.box_options(0);
@@ -112,7 +115,7 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
             }
             ++result->count;
         }
-        if (result->count)
+        if (result->count || result->binder)
             return result;
     }
     catch (const std::bad_alloc&)

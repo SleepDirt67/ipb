@@ -115,10 +115,12 @@ void CheckGeometry()
     model.build(vertices, 4, triangles, 2);
 
     Inputs input{&model, {Fvector{0, -.1f, 0}, Fvector{7, 1, 7}}, {.4f, .6f, .4f}, 1.3f, 2, _mm_getcsr()};
+    input.binder = std::make_shared<const int>(42);
     using Result = std::unique_ptr<ActivationResult>;
     Queue<Inputs, Result, decltype(&PrepareGeometry)> queue(&PrepareGeometry);
     WaitFor([&] { return queue.Submit(42, input); }, "submit real CDB work");
     auto prepared = WaitFor([&] { return queue.Take(42); }, "take real CDB work");
+    Require((*prepared)->binder == input.binder, "physics and binder share the admitted generation");
     auto extent = input.halfSize;
     extent.add(10.f * EPS_L);
     auto queryExtent = extent;

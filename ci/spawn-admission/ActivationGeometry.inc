@@ -22,13 +22,15 @@ class ActivationWork
 public:
     const CDB::MODEL* model;
     const float expansion;
+    const std::shared_ptr<const void> binder;
     Queue<Inputs, std::unique_ptr<ActivationResult>, decltype(&Prepare)> queue;
 
-    ActivationWork(const CDB::MODEL* source, float queryExpansion)
-        : model(source), expansion(queryExpansion), queue(&Prepare) {}
+    ActivationWork(const CDB::MODEL* source, float queryExpansion, std::shared_ptr<const void> preparedBinder)
+        : model(source), expansion(queryExpansion), binder(std::move(preparedBinder)), queue(&Prepare) {}
 };
 
-ActivationWork* StartActivationWork(const CDB::MODEL* model)
+ActivationWork* StartActivationWork(const CDB::MODEL* model,
+    std::shared_ptr<const void> binder)
 {
 #if defined(_M_X64) && !defined(DEBUG)
     const char* setting = std::getenv("IXRAY_SPAWN_PREPARE");
@@ -36,7 +38,7 @@ ActivationWork* StartActivationWork(const CDB::MODEL* model)
     {
         try
         {
-            return new ActivationWork(model, ph_console::ph_tri_query_ex_aabb_rate);
+            return new ActivationWork(model, ph_console::ph_tri_query_ex_aabb_rate, std::move(binder));
         }
         catch (const std::system_error&)
         {
@@ -68,7 +70,7 @@ void SubmitActivation(ActivationWork* work, u16 id, const Fvector* centers, unsi
         halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f ||
         halfSize.x > 5.f || halfSize.y > 5.f || halfSize.z > 5.f)
         return;
-    Inputs input{work->model, {}, halfSize, work->expansion, count, _mm_getcsr(), id};
+    Inputs input{work->model, {}, halfSize, work->expansion, count, _mm_getcsr(), id, work->binder};
     for (unsigned i = 0; i < count; ++i)
     {
         if (!_valid(centers[i]))
@@ -110,6 +112,12 @@ ActivationResult* ActivationScope::For(const IPhysicsShellHolder* owner)
         PacingDiag::SpawnSpan miss(PacingDiag::Kind::SpawnPrepareMiss, scope->id_);
     }
     return scope->prepared_;
+}
+
+std::shared_ptr<const void> ActivationScope::PreparedBinder(const IPhysicsShellHolder* owner)
+{
+    auto* result = For(owner);
+    return result ? result->binder : nullptr;
 }
 
 SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB::MODEL* model,

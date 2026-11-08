@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 namespace CDB { class MODEL; }
 class IPhysicsShellHolder;
 
@@ -8,7 +10,8 @@ namespace SpawnPreparation
 class ActivationWork;
 struct ActivationResult;
 
-XRPHYSICS_API ActivationWork* StartActivationWork(const CDB::MODEL* model);
+XRPHYSICS_API ActivationWork* StartActivationWork(const CDB::MODEL* model,
+    std::shared_ptr<const void> binder = {});
 XRPHYSICS_API void StopActivationWork(ActivationWork*& work);
 XRPHYSICS_API void SubmitActivation(ActivationWork* work, u16 object,
     const Fvector* centers, unsigned count, const Fvector& halfSize, bool speculative);
@@ -31,5 +34,6 @@ public:
     ActivationScope& operator=(const ActivationScope&) = delete;
 
     static ActivationResult* For(const IPhysicsShellHolder* owner);
+    static std::shared_ptr<const void> PreparedBinder(const IPhysicsShellHolder* owner);
 };
 }

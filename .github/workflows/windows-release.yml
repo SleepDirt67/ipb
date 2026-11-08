@@ -342,6 +342,9 @@ jobs:
       - name: Add detached ALife spawn preparation
         run: python ci/spawn-admission/apply.py ixray
 
+      - name: Prepare detached stock voice inputs for spawn admission
+        run: python ci/spawn-mainline/apply.py ixray checks/spawn-mainline
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -470,7 +473,7 @@ jobs:
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog ixray_spawn_contact_fixture ixray_spawn_admission_fixture --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog ixray_spawn_contact_fixture ixray_spawn_admission_fixture ixray_spawn_mainline_replay --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
       - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
@@ -493,6 +496,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Static contact differential failed' }
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_admission_fixture.exe | Tee-Object checks/SPAWN_ADMISSION_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Detached spawn admission differential failed' }
+          $env:IXRAY_SPAWN_PREPARE = '1'
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Detached voice binder replay failed' }
+          Remove-Item Env:IXRAY_SPAWN_PREPARE
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
           python ci/package.py

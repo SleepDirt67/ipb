@@ -4,6 +4,7 @@ import hashlib
 STOCK_SHA256 = '5b86e1d5ef581320917aa84b2b47a30b0e8d2dcd036c4080df8703f510713260'
 
 HELPER = b'''local stock_getFS = getFS
+local stock_variant_method = FS.sound_variant_count
 local native_lookup = setmetatable({}, {__mode = "k"})
 local function native_method(method)
     if type(method) ~= "function" then return false end
@@ -24,7 +25,8 @@ def rewrite(stock):
     legacy = stock[start:end]
     faster = b'''\tlocal f = getFS()
 \tlocal count, base = -2, nil
-\tif getFS == stock_getFS and type(f) == "userdata" and type(npc) == "userdata" and
+\tif getFS == stock_getFS and FS.sound_variant_count == stock_variant_method and
+\t    type(f) == "userdata" and type(npc) == "userdata" and
 \t    native_method(f.sound_variant_count) and native_method(f.exist) and native_method(npc.sound_prefix) then
 \t\tbase = npc:sound_prefix()..self.path
 \t\tcount = f:sound_variant_count(base)

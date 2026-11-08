@@ -62,7 +62,7 @@
   "ci/spawn-preparation/apply.py": "6bad9f1482d72f090c67643b69add835e35fe2480ac98af792f01a3c96e41c85",
   "ci/spawn-preparation/shader_fixture.cpp": "3eeb71f7aba571759a076c00370819f09c56d6f40f3d9fdf03f45ea865a13a27",
   "ci/spawn-preparation/shaders.py": "f62518dee9ad1b0a87e8bcb311ec32d5820d31e9f8d2de34575239826909e676",
-  "ci/spawn-preparation/voice.py": "b8bbfe4700d468a3fef99f662f4cd00f34c847743e21fa3289f2ac88bd66595e",
+  "ci/spawn-preparation/voice.py": "9bbb0df87867cfc0a2ae82a5fc49129eb4c0c1c5d27edb5a37549450c10848e7",
   "ci/spawn-preparation/voice_catalog_fixture.cpp": "da9e15f5f00557c3f6fa28d7fdb7132bf3b9a34e9b8a4e296c1f1e3f45e2604d",
   "ci/spawn-preparation/wave_fixture.cpp": "0e87cef46ea576b5e84b827a7d15b43961b140ff10478829f13e29915b39372b",
   "ci/spawn/SpawnSwitchKeys.h": "07d75fa2b2ee68518a4ab90bf412c13a57b993f549b0c14df3b3dbc301ef8977",

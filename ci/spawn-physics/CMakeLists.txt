@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(SpawnPhysicsPhaseFixture LANGUAGES CXX)
+add_executable(spawn_physics_phase_fixture fixture.cpp)
+target_compile_features(spawn_physics_phase_fixture PRIVATE cxx_std_17)
+target_include_directories(spawn_physics_phase_fixture PRIVATE "${GENERATED}" "${ENGINE}/src/xrPhysics")

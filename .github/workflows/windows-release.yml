@@ -342,6 +342,20 @@ jobs:
       - name: Pace sweep work across spawn dispatch and regular script maintenance
         run: python ci/spawn-dispatch/apply.py ixray
 
+      - name: Separate the activation solver list and test observer fallbacks
+        shell: pwsh
+        run: |
+          python ci/spawn-physics/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Activation world overlay failed' }
+          python ci/spawn-physics/generate_fixture.py ixray checks/spawn-physics-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Activation world fixture generation failed' }
+          cmake -S ci/spawn-physics -B checks/spawn-physics -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/checks/spawn-physics-generated" "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
+          if ($LASTEXITCODE -ne 0) { throw 'Activation world fixture configure failed' }
+          cmake --build checks/spawn-physics --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'Activation world fixture build failed' }
+          & checks/spawn-physics/Release/spawn_physics_phase_fixture.exe | Tee-Object checks/SPAWN_PHYSICS_PHASE_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Activation world fixture failed' }
+
       - name: Checkout LuaJIT from the exact IX-Ray package recipe
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -411,6 +425,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
           python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
           if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
+          python ci/spawn/replay.py ixray (Resolve-Path checks/dispatch-lua/bin/Release/lua51.dll) checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_REBUILT_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Stock script replay on rebuilt Lua failed' }
 
       - name: Compare prepared audio metadata using the exact Windows Vorbis DLL
         shell: pwsh

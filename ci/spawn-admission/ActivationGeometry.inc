@@ -1,0 +1,110 @@
+// Included once, by IActivationShape.cpp.
+#include "SpawnPreparationQueue.h"
+#include "SpawnPreparedGeometry.h"
+
+namespace SpawnPreparation
+{
+namespace
+{
+using Geometry::Inputs;
+using Geometry::maxPoses;
+using Geometry::PrepareGeometry;
+thread_local ActivationScope* currentActivation = nullptr;
+}
+
+class ActivationWork
+{
+public:
+    const CDB::MODEL* model;
+    Queue<Inputs, std::unique_ptr<ActivationResult>, decltype(&PrepareGeometry)> queue;
+    explicit ActivationWork(const CDB::MODEL* source) : model(source), queue(&PrepareGeometry) {}
+};
+
+ActivationWork* StartActivationWork(const CDB::MODEL* model)
+{
+#if defined(_M_X64) && !defined(DEBUG)
+    const char* setting = std::getenv("IXRAY_SPAWN_PREPARE");
+    if (model && setting && xr_strcmp(setting, "1") == 0)
+    {
+        try
+        {
+            return new ActivationWork(model);
+        }
+        catch (const std::system_error&)
+        {
+        }
+        catch (const std::bad_alloc&)
+        {
+        }
+    }
+#endif
+    return nullptr;
+}
+
+void StopActivationWork(ActivationWork*& work)
+{
+    if (!work)
+        return;
+    // A nested game callback may initiate level teardown on this thread.
+    for (auto* scope = currentActivation; scope; scope = scope->parent_)
+        if (scope->work_ == work)
+            scope->work_ = nullptr;
+    delete std::exchange(work, nullptr);
+}
+
+void SubmitActivation(ActivationWork* work, u16 id, const Fvector* centers, unsigned count,
+    const Fvector& halfSize)
+{
+#if defined(_M_X64) && !defined(DEBUG)
+    if (!work || count == 0 || count > maxPoses || !_valid(halfSize) ||
+        halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f)
+        return;
+    Inputs input{work->model, {}, halfSize, ph_console::ph_tri_query_ex_aabb_rate, count, _mm_getcsr()};
+    for (unsigned i = 0; i < count; ++i)
+    {
+        if (!_valid(centers[i]))
+            return;
+        input.centers[i] = centers[i];
+    }
+    work->queue.Submit(id, input);
+#endif
+}
+
+ActivationScope::ActivationScope(ActivationWork* work, u16 id, const IPhysicsShellHolder* owner)
+    : parent_(currentActivation), work_(work), owner_(owner), id_(id)
+{
+    currentActivation = this;
+}
+
+ActivationScope::~ActivationScope()
+{
+    currentActivation = parent_;
+    if (work_ && owner_)
+        work_->queue.Retire(id_);
+    delete prepared_;
+}
+
+ActivationResult* ActivationScope::For(const IPhysicsShellHolder* owner)
+{
+    auto* scope = currentActivation;
+    if (!scope || !scope->work_ || !scope->owner_ || scope->owner_ != owner)
+        return nullptr;
+    if (auto* result = scope->prepared_)
+        return result;
+    if (auto result = scope->work_->queue.Take(scope->id_))
+        scope->prepared_ = result->release();
+    return scope->prepared_;
+}
+
+SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB::MODEL* model,
+    const float* center, const Fvector& halfSize, const Fvector& queryExtent,
+    unsigned fpMode, xr_vector<int>& ids, bool& matched)
+{
+    auto* pose = Geometry::Match(result, model, center, halfSize, queryExtent, fpMode);
+    matched = pose != nullptr;
+    if (!pose)
+        return nullptr;
+    ids.assign(pose->ids.begin(), pose->ids.end());
+    return pose->faces.data();
+}
+}

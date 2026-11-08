@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn activation
+name: IX-Ray Windows x64 spawn admission experiment
 on:
   push:
     branches: [main, 'experiment/**']
@@ -339,6 +339,9 @@ jobs:
       - name: Stage model loading and reuse immutable activation contacts
         run: python ci/spawn-activation/apply.py ixray
 
+      - name: Add detached ALife spawn preparation
+        run: python ci/spawn-admission/apply.py ixray
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -467,7 +470,7 @@ jobs:
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog ixray_spawn_contact_fixture --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_audit_core_test ixray_spawn_ini_check ixray_spawn_plan_fixture ixray_spawn_voice_catalog ixray_spawn_contact_fixture ixray_spawn_admission_fixture --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
       - name: Verify actual xrCore INI reuse, live changes and DLTX fallbacks
@@ -488,6 +491,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore voice catalogue differential failed' }
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_contact_fixture.exe | Tee-Object checks/SPAWN_CONTACT_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Static contact differential failed' }
+          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_admission_fixture.exe | Tee-Object checks/SPAWN_ADMISSION_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Detached spawn admission differential failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
           python ci/package.py
@@ -501,7 +506,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Spawn-Activation-Windows-x64
+          name: IXRay-1.3.6-Spawn-Admission-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

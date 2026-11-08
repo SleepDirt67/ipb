@@ -35,6 +35,58 @@ def extract():
 old = extract()
 patch(a.engine, a.luabind)
 new = extract()
+# Instrument the pinned Luabind initialization only when the replay
+# debugging environment is enabled. Trace calls that happen before Lua scripts run.
+from apply import edit
+edit(a.luabind, "luabind/src/open.cpp", [
+    ('#include "luabind_api.h"', '#include "luabind_api.h"\n#include <cstdio>\n#include <cstdlib>'),
+    ('    void open(lua_State* L)\n    {',
+     '''    void open(lua_State* L)
+    {
+        auto trace = [](const char* step) {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN"))
+                std::fprintf(stderr, "[LUABIND-OPEN] %s\\n", step);
+        };
+        trace("entered");'''),
+    ('        lua_pushstring(L, "__luabind_classes");',
+     '        trace("before registry push");\n        lua_pushstring(L, "__luabind_classes");\n        trace("after registry push");'),
+    ('        r = static_cast<detail::class_registry*>(lua_newuserdata(L, sizeof(detail::class_registry)));',
+     '        trace("before registry userdata");\n        r = static_cast<detail::class_registry*>(lua_newuserdata(L, sizeof(detail::class_registry)));\n        trace("after registry userdata");'),
+    ('        lua_newtable(L);\n        lua_pushstring(L, "__gc");',
+     '        trace("before GC metatable");\n        lua_newtable(L);\n        lua_pushstring(L, "__gc");'),
+    ('        lua_setmetatable(L, -2);',
+     '        lua_setmetatable(L, -2);\n        trace("after GC metatable");'),
+    ('        new(r) detail::class_registry(L);',
+     '        trace("before class_registry construction");\n        new(r) detail::class_registry(L);\n        trace("after class_registry construction");'),
+    ('        lua_settable(L, LUA_REGISTRYINDEX);',
+     '        lua_settable(L, LUA_REGISTRYINDEX);\n        trace("after registry publish");'),
+    ('        lua_settable(L, LUA_GLOBALSINDEX);',
+     '        lua_settable(L, LUA_GLOBALSINDEX);\n        trace("returned");'),
+])
+edit(a.luabind, "luabind/src/class_registry.cpp", [
+    ('#include "luabind_api.h"', '#include "luabind_api.h"\n#include <cstdio>\n#include <cstdlib>'),
+    ('        int create_cpp_class_metatable(lua_State* L)\n        {',
+     '''        int create_cpp_class_metatable(lua_State* L)
+        {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN")) std::fprintf(stderr, "[LUABIND-REG] cpp class start\\n");'''),
+    ('        int create_cpp_instance_metatable(lua_State* L)\n        {',
+     '''        int create_cpp_instance_metatable(lua_State* L)
+        {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN")) std::fprintf(stderr, "[LUABIND-REG] cpp instance start\\n");'''),
+    ('        int create_lua_class_metatable(lua_State* L)\n        {',
+     '''        int create_lua_class_metatable(lua_State* L)
+        {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN")) std::fprintf(stderr, "[LUABIND-REG] lua class start\\n");'''),
+    ('        int create_lua_instance_metatable(lua_State* L)\n        {',
+     '''        int create_lua_instance_metatable(lua_State* L)
+        {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN")) std::fprintf(stderr, "[LUABIND-REG] lua instance start\\n");'''),
+    ('        int create_lua_function_metatable(lua_State* L)\n        {',
+     '''        int create_lua_function_metatable(lua_State* L)
+        {
+            if (std::getenv("IXRAY_DEBUG_LUABIND_OPEN")) std::fprintf(stderr, "[LUABIND-REG] lua function start\\n");'''),
+])
+
 new.append(function(a.engine / "src/xrCore/LocatorAPI.cpp", "bool CLocatorAPI::find_numbered_sounds"))
 a.output.mkdir(parents=True, exist_ok=True)
 for name, functions in (("before", old), ("after", new)):

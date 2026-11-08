@@ -119,7 +119,8 @@ apply("src/xrGame/Level.cpp", [
 
 first = stock.index(b"function npc_sound:init_npc(npc)")
 last = stock.index(b"function npc_sound:callback", first)
-fast = b"""\tlocal applied = stock_bind_voice and stock_bind_voice(npc, self, npc_id)
+fast = b"""\tlocal applied = stock_bind_voice and stock_variant_count == FS.sound_variant_count
+        and stock_bind_voice(npc, self, npc_id)
     if not applied then
 """
 # Keep the PR24 catalogue fallback, including the exact legacy Lua branch.
@@ -135,7 +136,7 @@ previous_block = previous[fallback_begin:fallback_end]
 new = previous[:fallback_begin] + fast + previous_block + b"    end\n" + previous[fallback_end:]
 # Pull the original native entry point into the same verified lexical scope.
 assert new.startswith(b"do\n")
-new = b"do\nlocal stock_bind_voice = ixray_apply_spawn_voice\n" + new[3:]
+new = b"do\nlocal stock_bind_voice = ixray_apply_spawn_voice\nlocal stock_variant_count = FS.sound_variant_count\n" + new[3:]
 formatted = ",\n".join(", ".join(str(value) for value in new[i:i+32]) for i in range(0, len(new), 32))
 inc.write_text(old_generated[:array.start(1)] + formatted + old_generated[array.end(1):], encoding="ascii")
 

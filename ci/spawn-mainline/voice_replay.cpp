@@ -85,7 +85,8 @@ static void Load(lua_State* L, const char* script, bool file)
     if (result || lua_pcall(L, 0, 0, 0))
     {
         std::fprintf(stderr, "Lua: %s\n", lua_tostring(L, -1));
-        std::abort();
+        std::fflush(stderr);
+        std::_Exit(2);
     }
 }
 

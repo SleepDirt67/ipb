@@ -39,6 +39,7 @@ apply("src/xrCore/LocatorAPI.h", [
 apply("src/xrCore/LocatorAPI.cpp", [
     ('#include "xrAddons.h"', '''#include "xrAddons.h"
 #include "SpawnVoiceCatalogue.h"
+#include <atomic>
 #include <cstdlib>
 #include <mutex>
 #include <shared_mutex>
@@ -69,7 +70,7 @@ apply("src/xrGame/fs_registrator_script.cpp", [
     ('\t\tdef("getFS",\t\t\t\t\t\t\t\t\tgetFS)\n\t];',
      '''\t\tdef("getFS",\t\t\t\t\t\t\t\t\tgetFS)
 \t];
-    static constexpr const char* methods[] = {"exist"};
+    static constexpr const char* methods[] = {"exist", "sound_variant_count"};
     SpawnVoice::Capture(L, SpawnVoice::fsKey, "FS", methods, std::size(methods));'''),
 ])
 apply("src/xrGame/script_game_object_script.cpp", [
@@ -94,11 +95,21 @@ apply("src/xrGame/Level_network_spawn.cpp", [
         };
         SpawnVoice::Scope voice(O->cast_game_object(),
             static_cast<const IPhysicsShellHolder*>(alive), voiceSource);
-        spawnSucceeded = O->net_Spawn(E);'''),
+        spawnSucceeded = O->net_Spawn(E);
+        if (voice.Registrations())
+        {
+            const auto payload = static_cast<unsigned long long>(E->ID) |
+                (static_cast<unsigned long long>(voice.Registrations()) << 16) |
+                (static_cast<unsigned long long>(voice.PreparedNames()) << 40);
+            PacingDiag::SpawnSpan preparedVoice(PacingDiag::Kind::SpawnBinderPrepared, payload);
+        }'''),
 ])
 apply("src/xrGame/Level_network_start_client.cpp", [
     ('        PrepareSpawnVisuals();',
      '        PrepareSpawnVisuals();\n        FS.prepare_spawn_voice_catalogue();'),
+])
+apply("src/xrEngine/PacingDiagnostics.h", [
+    ("SpawnPrepareUse, SpawnPrepareMiss", "SpawnPrepareUse, SpawnPrepareMiss, SpawnBinderPrepared"),
 ])
 apply("src/xrGame/Level.cpp", [
     ('spawnActivationWork = SpawnPreparation::StartActivationWork(ObjectSpace.GetStaticModel());',
@@ -108,9 +119,7 @@ apply("src/xrGame/Level.cpp", [
 
 first = stock.index(b"function npc_sound:init_npc(npc)")
 last = stock.index(b"function npc_sound:callback", first)
-fast = b"""\tlocal applied = stock_bind_voice and ixray_apply_spawn_voice == stock_bind_voice
-        and stock_bind_voice(npc, getFS, self.path, nstl, snd_type.talk,
-            not not self.is_combat_sound, self.npc[npc_id], self.sound_path[npc_id])
+fast = b"""\tlocal applied = stock_bind_voice and stock_bind_voice(npc, self, npc_id)
     if not applied then
 """
 # Keep the PR24 catalogue fallback, including the exact legacy Lua branch.

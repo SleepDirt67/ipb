@@ -41,13 +41,26 @@ inline void Capture(lua_State* L, const char* registryKey, const char* type, con
     lua_pop(L, 1);
 }
 
-inline bool SameMember(lua_State* L, int object, int expected, const char* name)
+enum Key
 {
-    lua_getfield(L, object, name);
-    lua_getfield(L, expected, name);
-    const bool same = lua_iscfunction(L, -1) && lua_rawequal(L, -1, -2);
-    lua_pop(L, 2);
-    return same;
+    Index = 1, Class, NpcKey, FsKey, GetFs, Exist, VariantCount, Add, CombatAdd, Prefix, Path, Combat,
+    NpcState, SoundPaths, Id, Max, Limit, SoundType, Talk, KeyCount = Talk
+};
+inline constexpr const char* Keys[] = {
+    "__index", "class", npcKey, fsKey, "getFS", "exist", "sound_variant_count", "add_sound", "add_combat_sound",
+    "sound_prefix", "path", "is_combat_sound", "npc", "sound_path", "id", "max", "nstl",
+    "snd_type", "talk"
+};
+static_assert(std::size(Keys) == KeyCount);
+
+// Keys are pinned as C closure upvalues at registration. Raw reads here
+// neither invoke Lua metatables nor call lua_pushstring's GC check.
+inline void RawField(lua_State* L, int table, Key key)
+{
+    if (table < 0 && table > LUA_REGISTRYINDEX)
+        --table;
+    lua_pushvalue(L, lua_upvalueindex(key));
+    lua_rawget(L, table);
 }
 
 inline bool PlainTable(lua_State* L, int index)
@@ -58,6 +71,72 @@ inline bool PlainTable(lua_State* L, int index)
         return true;
     lua_pop(L, 1);
     return false;
+}
+
+inline luabind::detail::object_rep* ReadWrapper(lua_State* L, int index, lua_CFunction getter)
+{
+    if (lua_type(L, index) != LUA_TUSERDATA ||
+        lua_objlen(L, index) < sizeof(luabind::detail::object_rep) || !lua_getmetatable(L, index))
+        return nullptr;
+    RawField(L, -1, Index);
+    const bool native = lua_tocfunction(L, -1) == getter;
+    lua_pop(L, 2);
+    return native ? static_cast<luabind::detail::object_rep*>(lua_touserdata(L, index)) : nullptr;
+}
+
+inline bool PushMember(lua_State* L, const luabind::detail::object_rep& wrapper, Key key)
+{
+    const auto& instance = wrapper.get_lua_table();
+    if (instance.is_valid())
+    {
+        instance.get(L);
+        if (!PlainTable(L, -1))
+        {
+            lua_pop(L, 1);
+            return false;
+        }
+        RawField(L, -1, key);
+        lua_remove(L, -2);
+        if (!lua_isnil(L, -1))
+            return true;
+        lua_pop(L, 1);
+    }
+    wrapper.crep()->get_table(L);
+    if (!PlainTable(L, -1))
+    {
+        lua_pop(L, 1);
+        return false;
+    }
+    RawField(L, -1, key);
+    lua_remove(L, -2);
+    return true;
+}
+
+inline bool SameMember(lua_State* L, const luabind::detail::object_rep& object, int expected, Key key)
+{
+    if (!PushMember(L, object, key))
+        return false;
+    RawField(L, expected, key);
+    const bool same = lua_iscfunction(L, -1) && lua_rawequal(L, -1, -2);
+    lua_pop(L, 2);
+    return same;
+}
+
+inline bool PushGlobal(lua_State* L, int environment, Key key)
+{
+    RawField(L, environment, key);
+    if (!lua_isnil(L, -1))
+        return true;
+    lua_pop(L, 1);
+    if (!lua_getmetatable(L, environment))
+        return false;
+    RawField(L, -1, Index);
+    const bool ordinaryNamespace = lua_rawequal(L, -1, LUA_GLOBALSINDEX);
+    lua_pop(L, 2);
+    if (!ordinaryNamespace)
+        return false;
+    RawField(L, LUA_GLOBALSINDEX, key);
+    return true;
 }
 
 inline bool ReadUnsigned(lua_State* L, int index, u32& out)

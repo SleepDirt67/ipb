@@ -70,7 +70,7 @@ void SubmitActivation(ActivationWork* work, u16 id, const Fvector* centers, unsi
         halfSize.x <= 0.f || halfSize.y <= 0.f || halfSize.z <= 0.f ||
         halfSize.x > 5.f || halfSize.y > 5.f || halfSize.z > 5.f)
         return;
-    Inputs input{work->model, {}, halfSize, work->expansion, count, _mm_getcsr(), id, work->binder};
+    Inputs input{work->model, {}, halfSize, work->expansion, count, _mm_getcsr(), id};
     for (unsigned i = 0; i < count; ++i)
     {
         if (!_valid(centers[i]))
@@ -116,13 +116,16 @@ ActivationResult* ActivationScope::For(const IPhysicsShellHolder* owner)
 
 std::shared_ptr<const void> ActivationScope::PreparedBinder(const IPhysicsShellHolder* owner)
 {
-    auto* result = For(owner);
-    return result ? result->binder : nullptr;
+    auto* scope = currentActivation;
+    if (!scope || !scope->work_ || !owner || scope->owner_ != owner)
+        return {};
+    return scope->work_->binder;
 }
 
 SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB::MODEL* model,
     const float* center, const Fvector& halfSize, const Fvector& queryExtent,
-    unsigned fpMode, xr_vector<int>& ids, bool& matched)
+    unsigned fpMode, SpawnCollision::Plan<SpawnCollision::Face>& plan,
+    xr_vector<int>& ids, bool& matched)
 {
     auto* pose = Geometry::Match(result, model, center, halfSize, queryExtent, fpMode);
     matched = pose != nullptr;
@@ -132,7 +135,6 @@ SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB
         PacingDiag::Kind::SpawnPrepareMiss, result->object);
     if (!pose)
         return nullptr;
-    ids.assign(pose->ids.begin(), pose->ids.end());
-    return pose->faces.data();
+    return Geometry::Admit(*pose, plan, ids);
 }
 }

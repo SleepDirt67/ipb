@@ -21,6 +21,7 @@ enum ESoundTypes { SOUND_TYPE_TALKING = 0x4000 };
 
 namespace
 {
+struct ReplaySoundTypes {};
 unsigned fsCalls;
 unsigned registrations;
 std::shared_ptr<const SpawnVoice::Catalogue> admittedPlan;
@@ -75,6 +76,7 @@ static const CLocatorAPI::file* Exist(CLocatorAPI* fs, const char* root, const c
 }
 
 static CLocatorAPI* GetFS() { return &FS; }
+static int OtherVariantCount(CLocatorAPI*, const char*) { return -2; }
 
 static void Load(lua_State* L, const char* script, bool file)
 {
@@ -113,10 +115,13 @@ static void Register(lua_State* L)
     using namespace luabind;
     open(L);
     module(L)[
+        class_<ReplaySoundTypes>("snd_type")
+            .enum_("sound_types")[value("talk", int(SOUND_TYPE_TALKING))],
         class_<CLocatorAPI::file>("FS_file"),
         class_<CLocatorAPI>("FS")
             .def("exist", &Exist)
-            .def("sound_variant_count", &CLocatorAPI::sound_variant_count),
+            .def("sound_variant_count", &CLocatorAPI::sound_variant_count)
+            .def("other_variant_count", &OtherVariantCount),
         def("getFS", &GetFS),
         class_<CScriptGameObject>("game_object")
             .def(constructor<>())
@@ -128,7 +133,7 @@ static void Register(lua_State* L)
             .def("add_combat_sound", &CScriptGameObject::add_combat_sound)
             .def("other_add_sound", &CScriptGameObject::scripted_add_sound)
     ];
-    static constexpr const char* methods[] = {"exist"};
+    static constexpr const char* methods[] = {"exist", "sound_variant_count"};
     SpawnVoice::Capture(L, SpawnVoice::fsKey, "FS", methods, std::size(methods));
     SpawnVoice::RegisterNativeApply(L);
     lua_pushcfunction(L, WithSpawn);
@@ -151,7 +156,9 @@ static Result Replay(const char* voice, const char* input, const char* mode)
     luaL_openlibs(L);
     Register(L);
     Load(L, input, true);
-    Load(L, voice, true);
+    lua_pushstring(L, voice);
+    lua_setglobal(L, "voice_file");
+    Load(L, "load_voice_in_namespace(voice_file)", false);
     lua_pushstring(L, mode);
     lua_setglobal(L, "replay_mode");
     fsCalls = registrations = 0;
@@ -198,7 +205,7 @@ int main(int argc, char** argv)
     Require((numbers == xr_vector<u32>{0, 1, 2, 4, 21, 22, 25}), "native gaps and zero preserved");
 
     for (const auto* mode : {"normal", "npc_override", "fs_override", "getfs_override",
-            "debug_hook", "foreign_scope", "uppercase_prefix"})
+            "debug_hook", "foreign_scope", "uppercase_prefix", "theme_index", "count_override", "sound_type_index"})
     {
         const auto base = Replay(argv[1], argv[4], mode);
         const auto work = Replay(argv[3], argv[4], mode);

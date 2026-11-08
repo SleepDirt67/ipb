@@ -7,7 +7,7 @@ struct SpawnVoiceIndex
     std::string root;
     std::shared_ptr<const SpawnVoice::Catalogue> catalogue;
     u64 revision = 0;
-    bool ready = false;
+    std::atomic_bool ready{false};
 
     void Invalidate(const CLocatorAPI* fs, std::string_view file)
     {
@@ -88,7 +88,8 @@ catch (const std::bad_alloc&)
 
 bool CLocatorAPI::read_spawn_voice_catalogue(LPCSTR base, int* count, u32 limit, xr_vector<u32>* variants)
 {
-    if (!base || !path_exist("$game_sounds$") ||
+    if (!spawnVoiceIndex.ready.load(std::memory_order_relaxed) ||
+        !base || !path_exist("$game_sounds$") ||
         m_Flags.is_any(flNeedRescan | flNeedCheck | flEventNotificator | flBuildCopy | flEBuildCopy | flCacheFiles))
         return false;
     const auto* root = get_path("$game_sounds$")->m_Path;
@@ -120,7 +121,7 @@ int CLocatorAPI::prepared_spawn_voice_count(LPCSTR base)
 
 std::shared_ptr<const SpawnVoice::Catalogue> CLocatorAPI::acquire_spawn_voice_catalogue()
 {
-    if (!path_exist("$game_sounds$") ||
+    if (!spawnVoiceIndex.ready.load(std::memory_order_relaxed) || !path_exist("$game_sounds$") ||
         m_Flags.is_any(flNeedRescan | flNeedCheck | flEventNotificator | flBuildCopy | flEBuildCopy | flCacheFiles))
         return {};
     const auto* root = get_path("$game_sounds$")->m_Path;

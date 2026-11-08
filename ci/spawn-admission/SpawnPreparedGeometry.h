@@ -10,6 +10,7 @@ namespace Geometry
 {
 constexpr unsigned maxPoses = 3;
 constexpr unsigned maxFaces = 512;
+constexpr unsigned maxNodes = 4096;
 
 struct Inputs
 {
@@ -20,7 +21,6 @@ struct Inputs
     unsigned count;
     unsigned fpMode;
     u16 object = 0;
-    std::shared_ptr<const void> binder;
 
     bool operator==(const Inputs& other) const
     {
@@ -54,7 +54,6 @@ struct ActivationResult
     std::array<Geometry::Pose, Geometry::maxPoses> poses;
     unsigned count = 0;
     u16 object = 0;
-    std::shared_ptr<const void> binder;
 };
 
 namespace Geometry
@@ -75,7 +74,6 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
         auto result = std::make_unique<ActivationResult>();
         result->model = input.model;
         result->object = input.object;
-        result->binder = input.binder;
         result->fpMode = SpawnCollision::Scope::FloatingPointMode();
         CDB::COLLIDER collider;
         collider.box_options(0);
@@ -93,10 +91,9 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
             pose.halfSize = input.halfSize;
             pose.halfSize.add(10.f * EPS_L);
             pose.queryExtent.mul(pose.halfSize, input.expansion);
-            collider.box_query(input.model, center, pose.queryExtent);
-            const auto count = collider.r_count();
-            if (count < 0 || static_cast<unsigned>(count) > maxFaces)
+            if (!collider.box_query_bounded(input.model, center, pose.queryExtent, maxNodes, maxFaces))
                 continue;
+            const auto count = collider.r_count();
             pose.ids.resize(count);
             pose.faces.resize(count);
             const auto* query = count ? collider.r_begin() : nullptr;
@@ -115,7 +112,7 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
             }
             ++result->count;
         }
-        if (result->count || result->binder)
+        if (result->count)
             return result;
     }
     catch (const std::bad_alloc&)
@@ -128,6 +125,16 @@ inline std::optional<std::unique_ptr<ActivationResult>> PrepareGeometry(const In
 
 namespace Geometry
 {
+inline SpawnCollision::Face* Admit(Pose& pose, SpawnCollision::Plan<SpawnCollision::Face>& plan,
+    xr_vector<int>& ids)
+{
+    ids.assign(pose.ids.begin(), pose.ids.end());
+    // A detached query can replace the triangle IDs while leaving the
+    // result count unchanged. No previously computed row survives that.
+    plan.ClearRows();
+    return pose.faces.data();
+}
+
 inline Pose* Match(ActivationResult* result, const CDB::MODEL* model,
     const float* center, const Fvector& halfSize, const Fvector& queryExtent,
     unsigned fpMode)

@@ -1,10 +1,9 @@
 stalker_ids = {sound_script = 1000}
-snd_type = {talk = 0x4000}
 native_applied = 0
 local native = ixray_apply_spawn_voice
 ixray_apply_spawn_voice = function(...)
     local applied = native(...)
-    if applied then native_applied = native_applied + 1 end
+    if applied then _G.native_applied = _G.native_applied + 1 end
     return applied
 end
 
@@ -30,7 +29,19 @@ end
 function character_community() return "stalker" end
 function abort(...) error(string.format(...)) end
 
+function load_voice_in_namespace(file)
+    local env = setmetatable({}, {__index = _G})
+    local input = assert(io.open(file, "rb"))
+    local source = input:read("*a")
+    input:close()
+    local chunk = assert(loadstring("local this = ...; setfenv(1, this)\n" .. source, "@" .. file))
+    setfenv(ixray_apply_spawn_voice, env)
+    chunk(env)
+    theme, npc_sound, init_npc_sound = env.theme, env.npc_sound, env.init_npc_sound
+end
+
 function replay_spawn()
+    local combatReads, soundTypeReads = 0, 0
     local fixtures = {"line", "single", "line2"}
     local order = {}
     for i = 1, 48 do
@@ -45,6 +56,21 @@ function replay_spawn()
             avail_communities = i % 6 == 0 and "army" or "stalker",
         }
         theme[name] = npc_sound(config, name)
+        if replay_mode == "theme_index" then
+            local previous = debug.getmetatable(theme[name])
+            local custom = {}
+            for k, v in pairs(previous) do custom[k] = v end
+            local reads = 0
+            custom.__index = function(self, key)
+                if key == "is_combat_sound" then
+                    reads = reads + 1
+                    combatReads = combatReads + 1
+                    return reads % 2 == 0
+                end
+                return previous.__index(self, key)
+            end
+            debug.setmetatable(theme[name], custom)
+        end
     end
     if replay_mode == "getfs_override" then
         local old = getFS
@@ -52,6 +78,14 @@ function replay_spawn()
     elseif replay_mode == "fs_override" then
         local old = getFS().exist
         FS.exist = function(...) return old(...) end
+    elseif replay_mode == "count_override" then
+        FS.sound_variant_count = FS.other_variant_count
+    elseif replay_mode == "sound_type_index" then
+        local nativeSoundType = snd_type
+        snd_type = setmetatable({}, {__index = function(_, key)
+            soundTypeReads = soundTypeReads + 1
+            return nativeSoundType[key]
+        end})
     elseif replay_mode == "debug_hook" then
         debug.sethook(function() end, "c")
     end
@@ -81,7 +115,7 @@ function replay_spawn()
     end
     if replay_mode == "debug_hook" then debug.sethook() end
 
-    local values = {}
+    local values = {tostring(combatReads), tostring(soundTypeReads)}
     for _, name in ipairs(order) do
         local entry = theme[name]
         values[#values + 1] = tostring(entry.can_play_group_sound)

@@ -12,7 +12,7 @@ KINDS = {
     19: "game_events", 20: "spawn_event", 32: "spawn_dispatch", 33: "stalker_spawn",
     34: "binder_reload", 35: "binder_reinit", 36: "binder_net_spawn", 37: "sound_collection",
     38: "position", 39: "other_event", 40: "spawn_publish", 41: "alife_switch_online",
-    42: "prepare_submit", 43: "prepare_worker", 44: "prepare_use", 45: "prepare_miss",
+    42: "prepare_submit", 43: "prepare_worker", 44: "prepare_use", 45: "prepare_miss", 46: "binder_prepared",
 }
 
 
@@ -84,6 +84,12 @@ def summarize(directory):
                                 "qpc_start": low, "qpc_end": high}
                                for low, high, part, thread, value in by_frame[frame]
                                if part == 32 and thread == tid and start <= low <= high <= end],
+            "prepared_binder": [
+                {"id": value & 65535, "native_registrations": (value >> 16) & 0xffffff,
+                 "prepared_name_lists": value >> 40}
+                for low, high, part, thread, value in by_frame[frame]
+                if part == 46 and thread == tid and start <= low <= high <= end
+            ],
             "nested_ms": {KINDS[k]: ms(union(v, start, end)) for k, v in sorted(nested.items()) if v},
             "binder_union_ms": ms(union(binder, start, end)),
             "outside_binder_ms": ms(end - start - union(binder, start, end)),
@@ -114,7 +120,7 @@ def summarize(directory):
         present_join = None
     preparation = Counter()
     for _, _, kind, _, _, _ in spans:
-        if 42 <= kind <= 45:
+        if 42 <= kind <= 46:
             preparation[KINDS[kind]] += 1
     return {
         "spawn_preparation_events": dict(preparation),

@@ -25,10 +25,81 @@ for name in ("SpawnPreparationQueue.h", "SpawnActivationWork.h", "ActivationGeom
     shutil.copyfile(source / name, physics / name)
 shutil.copyfile(source / "SpawnAdmission.inc", game / "SpawnAdmission.inc")
 
+edit(engine / "xrCore/Collision", "xrCDB.h", [
+    ("\t\tvoid\t\t\tbox_query\t\t(const MODEL *m_def, const Fvector& b_center, const Fvector& b_dim);",
+     """\t\tvoid\t\t\tbox_query\t\t(const MODEL *m_def, const Fvector& b_center, const Fvector& b_dim);
+        bool box_query_bounded(const MODEL* model, const Fvector& center, const Fvector& extent,
+            u32 maxNodes, u32 maxResults);"""),
+])
+edit(engine / "xrCore/Collision", "xrCDB_box.cpp", [
+    ("\tvoid\t\t\t_prim\t\t(DWORD prim)\n\t{",
+     """    template<bool Bounded = false>
+    bool _prim(DWORD prim, u32 maxResults = 0)
+    {"""),
+    ("\t\tif (!_tri())\t\t\treturn;\n\t\tRESULT& R", """        if (!_tri())
+            return true;
+        if constexpr (Bounded)
+            if (static_cast<u32>(dest->r_count()) >= maxResults)
+                return false;
+\t\tRESULT& R"""),
+    ("""\t\tR.dummy\t\t= T.dummy;
+\t}
+\tvoid\t\t\t_stab\t\t(const AABBNoLeafNode* node)""", """\t\tR.dummy\t\t= T.dummy;
+        return true;
+\t}
+\tvoid\t\t\t_stab\t\t(const AABBNoLeafNode* node)"""),
+    ("\n};\n\nvoid COLLIDER::box_query", """
+    bool _stab_bounded(const AABBNoLeafNode* node, u32& remaining, u32 maxResults)
+    {
+        if (!remaining)
+            return false;
+        --remaining;
+        if (!_box((Fvector&)node->mAABB.mCenter, (Fvector&)node->mAABB.mExtents))
+            return true;
+        const bool first = node->HasPosLeaf() ? _prim<true>(node->GetPosPrimitive(), maxResults) :
+            _stab_bounded(node->GetPos(), remaining, maxResults);
+        if (!first)
+            return false;
+        if (bFirst && dest->r_count())
+            return true;
+        return node->HasNegLeaf() ? _prim<true>(node->GetNegPrimitive(), maxResults) :
+            _stab_bounded(node->GetNeg(), remaining, maxResults);
+    }
+};
+
+void COLLIDER::box_query"""),
+    ("\nstruct obb_collider", """
+bool COLLIDER::box_query_bounded(const MODEL* model, const Fvector& center,
+    const Fvector& extent, u32 maxNodes, u32 maxResults)
+{
+    r_clear();
+    // The worker owns a read-only level model published after loading.
+    // A model that is still building is a miss, never a sync point.
+    if (!model || model->status != MODEL::S_READY || !model->tree)
+        return false;
+    const auto* tree = static_cast<const AABBNoLeafTree*>(model->tree->GetTree());
+    if (!tree || !tree->GetNodes())
+        return false;
+    cform_box_collider query(!!(box_mode & OPT_FULL_TEST), !!(box_mode & OPT_ONLYFIRST));
+    query._init(this, model->verts, model->tris, center, extent);
+    if (query._stab_bounded(tree->GetNodes(), maxNodes, maxResults))
+        return true;
+    r_clear();
+    return false;
+}
+
+struct obb_collider"""),
+])
+
 edit(engine / "xrEngine", "PacingDiagnostics.h", [
     ("OtherGameEvent, SpawnPublish, ALifeSwitchOnline",
      "OtherGameEvent, SpawnPublish, ALifeSwitchOnline,\n"
      "        SpawnPrepareSubmit, SpawnPrepareWorker, SpawnPrepareUse, SpawnPrepareMiss"),
+])
+
+edit(physics, "ActivationCollisionPlan.h", [
+    ("    void ClearRows()", "public:\n    void ClearRows()"),
+    ("public:\n    void Clear()", "    void Clear()"),
 ])
 
 edit(physics, "SpawnActivationContacts.h", [
@@ -39,7 +110,7 @@ namespace SpawnPreparation
 {
 SpawnCollision::Face* TakeActivationGeometry(ActivationResult* result, const CDB::MODEL* model,
     const float* center, const Fvector& halfSize, const Fvector& queryExtent,
-    unsigned fpMode, xr_vector<int>& ids, bool& matched);
+    unsigned fpMode, SpawnCollision::Plan<SpawnCollision::Face>& plan, xr_vector<int>& ids, bool& matched);
 }
 
 namespace SpawnCollision
@@ -71,7 +142,7 @@ edit(physics, "tri-colliderknoopc/dSortTriPrimitive.h", [
         if (newStaticQuery && activation)
             detachedFaces = SpawnPreparation::TakeActivationGeometry(
                 SpawnCollision::Scope::PreparedFor(dGeomGetBody(o1)), model,
-                p, AABB, aabb, fpMode, data->cashed_tries, detached);
+                p, AABB, aabb, fpMode, *activation, data->cashed_tries, detached);
         if (newStaticQuery && !detached)
         {"""),
     ("            if (activation)\n                activation->SetStaticQueryCount(data->cashed_tries.size());\n        }",
@@ -93,8 +164,8 @@ edit(game, "Level.h", [
     u16 spawnPreparationCursor = u16(-1);
 
 \tNET_Queue_Event\t\t\t\t*game_events;"""),
-    ("\tvoid\t\t\t\t\t\tcl_Process_Spawn", """    bool PrepareALifeSpawn(const CSE_ALifeDynamicObject& object, bool speculative = false);
-    void PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
+    ("\tvoid\t\t\t\t\t\tcl_Process_Spawn", """    bool PrepareALifeSpawn(const CSE_ALifeDynamicObject& object, bool speculative);
+    void PrepareALifeSpawns(const CALifeLevelRegistry& registry,
         const Fvector& actorPosition, float onlineDistance);
 
 \tvoid\t\t\t\t\t\tcl_Process_Spawn"""),
@@ -127,26 +198,6 @@ edit(game, "Level_network_spawn.cpp", [
         SpawnPreparation::ActivationScope preparation(spawnActivationWork, E->ID, alive);
         spawnSucceeded = O->net_Spawn(E);"""),
 ])
-edit(game, "alife_switch_manager.cpp", [
-    ('#ifdef DEBUG\n#\tinclude "level.h"\n#endif // DEBUG', '#include "Level.h"'),
-    ("\tobject->m_bOnline\t\t\t\t= true;", """    if (g_pGameLevel)
-        Level().PrepareALifeSpawn(*object);
-
-\tobject->m_bOnline\t\t\t\t= true;"""),
-])
-edit(game, "alife_online_offline_group.cpp", [
-    ('#include "alife_simulator.h"', '#include "alife_simulator.h"\n#include "Level.h"'),
-    ("\tMEMBERS::iterator\t\t\tI = m_members.begin();\n\tMEMBERS::iterator\t\t\tE = m_members.end();\n\tfor ( ; I != E; ++I){\n\t\talife().add_online",
-     """    if (g_pGameLevel)
-        for (const auto& entry : m_members)
-            Level().PrepareALifeSpawn(*entry.second);
-
-\tMEMBERS::iterator\t\t\tI = m_members.begin();
-\tMEMBERS::iterator\t\t\tE = m_members.end();
-\tfor ( ; I != E; ++I){
-\t\talife().add_online"""),
-])
-
 root = engine.parent
 shutil.copyfile(source / "fixture.cpp", root / "ixray_spawn_admission_fixture.cpp")
 with (root / "CMakeLists.txt").open("a", encoding="utf-8") as build:
@@ -162,5 +213,5 @@ edit(game, "alife_update_manager.cpp", [
     ("\tupdate_scheduled(false);",
      "\tupdate_scheduled(false);\n"
      "    if (!m_changing_level && g_pGameLevel && graph().actor())\n"
-     "        Level().PrepareOfflineALifeSpawns(graph().level(), graph().actor()->o_Position, online_distance());"),
+     "        Level().PrepareALifeSpawns(graph().level(), graph().actor()->o_Position, online_distance());"),
 ])

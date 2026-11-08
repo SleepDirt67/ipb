@@ -101,6 +101,31 @@ bool Same(float a, float b)
     return std::bit_cast<unsigned>(a) == std::bit_cast<unsigned>(b);
 }
 
+void CheckReplacedTriangleIds()
+{
+    Fvector vertices[]{{1, 0, 0}, {2, 0, 0}, {1, 0, 1}, {3, 0, 0}, {4, 0, 0}, {3, 0, 1}};
+    CDB::TRI triangles[2]{};
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        triangles[0].verts[i] = i;
+        triangles[1].verts[i] = i + 3;
+    }
+    SpawnCollision::Plan<SpawnCollision::Face> plan;
+    const Fvector center{}, extent{1, 1, 1};
+    const auto mode = SpawnCollision::Scope::FloatingPointMode();
+    Require(plan.Select(triangles, vertices, 1, true, &center.x, &extent.x, mode), "ordinary query A");
+    Require(plan.At(0).Vertices(triangles[0], vertices)[0].x == 1.f, "query A vertices");
+    Pose next{};
+    next.ids.push_back(1);
+    next.faces.resize(1);
+    xr_vector<int> ids{0};
+    Admit(next, plan, ids);
+    Require(ids == xr_vector<int>{1}, "detached query B has the same count but different ID");
+    Require(plan.Select(triangles, vertices, ids.size(), false, &center.x, &extent.x, mode), "cached query B");
+    Require(plan.At(0).Vertices(triangles[ids[0]], vertices)[0].x == 3.f,
+        "cached query B must not inherit A vertices");
+}
+
 void CheckGeometry()
 {
     Fvector vertices[]{{-2, 0, -2}, {2, 0, -2}, {-2, 0, 2}, {2, 0, 2}};
@@ -115,12 +140,10 @@ void CheckGeometry()
     model.build(vertices, 4, triangles, 2);
 
     Inputs input{&model, {Fvector{0, -.1f, 0}, Fvector{7, 1, 7}}, {.4f, .6f, .4f}, 1.3f, 2, _mm_getcsr()};
-    input.binder = std::make_shared<const int>(42);
     using Result = std::unique_ptr<ActivationResult>;
     Queue<Inputs, Result, decltype(&PrepareGeometry)> queue(&PrepareGeometry);
     WaitFor([&] { return queue.Submit(42, input); }, "submit real CDB work");
     auto prepared = WaitFor([&] { return queue.Take(42); }, "take real CDB work");
-    Require((*prepared)->binder == input.binder, "physics and binder share the admitted generation");
     auto extent = input.halfSize;
     extent.add(10.f * EPS_L);
     auto queryExtent = extent;
@@ -171,6 +194,10 @@ void CheckGeometry()
         }
     }
     Require(comparisons > 0, "CDB fixture exercised real overlapping triangles");
+    Require(!collider.box_query_bounded(&model, input.centers[0], queryExtent, 0, 512) &&
+        collider.r_count() == 0, "node budget abort discards any result");
+    Require(!collider.box_query_bounded(&model, input.centers[0], queryExtent, 4096, 0) &&
+        collider.r_count() == 0, "result budget abort discards any result");
 }
 }
 
@@ -180,6 +207,7 @@ int main()
     CheckQueue();
     CheckLookahead();
     CheckGeometry();
+    CheckReplacedTriangleIds();
     Core._destroy();
     std::puts("PASS: detached CDB differential, deadline miss, cancellation, ID reuse and queue ownership");
 }

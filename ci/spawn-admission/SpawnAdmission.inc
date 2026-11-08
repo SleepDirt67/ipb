@@ -46,7 +46,7 @@ bool CLevel::PrepareALifeSpawn(const CSE_ALifeDynamicObject& object, bool specul
     return true;
 }
 
-void CLevel::PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
+void CLevel::PrepareALifeSpawns(const CALifeLevelRegistry& registry,
     const Fvector& actorPosition, float onlineDistance)
 {
     if (!spawnActivationWork || IsDemoPlay() || IsDemoSave())
@@ -63,10 +63,10 @@ void CLevel::PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
             candidate = objects.begin();
         const auto& [id, object] = *candidate;
         spawnPreparationCursor = id;
-        if (object->m_bOnline || object->ID_Parent != u16(-1))
+        if (object->ID_Parent != u16(-1))
             continue;
-        const float distance = actorPosition.distance_to_sqr(object->o_Position);
-        if (distance > limit * limit)
+        const bool near = actorPosition.distance_to_sqr(object->o_Position) <= limit * limit;
+        if (!near && !object->m_bOnline)
             continue;
         if (const auto* group = smart_cast<const CSE_ALifeOnlineOfflineGroup*>(object))
         {
@@ -76,13 +76,20 @@ void CLevel::PrepareOfflineALifeSpawns(const CALifeLevelRegistry& registry,
                 const auto* member = entry.second;
                 if (++examined > 8)
                     break;
-                if (!member->m_bOnline && PrepareALifeSpawn(*member, true))
+                const bool pending = member->m_bOnline && !Objects.net_Find(member->ID);
+                if ((pending || (near && !member->m_bOnline)) &&
+                    PrepareALifeSpawn(*member, !pending))
                     ++requests;
                 if (requests == 4)
                     break;
             }
         }
-        else if (PrepareALifeSpawn(*object, true))
-            ++requests;
+        else
+        {
+            const bool pending = object->m_bOnline && !Objects.net_Find(object->ID);
+            if ((pending || (near && !object->m_bOnline)) &&
+                PrepareALifeSpawn(*object, !pending))
+                ++requests;
+        }
     }
 }

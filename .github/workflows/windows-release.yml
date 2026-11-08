@@ -586,8 +586,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host 'START: full installer QA'
+          $qaMarker = 'checks/PUBLIC_WINDOWS_QA.txt'
+          Remove-Item -LiteralPath $qaMarker -ErrorAction SilentlyContinue
           & ci/verify_package.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Windows install or rollback failed' }
+          if (-not (Test-Path -LiteralPath $qaMarker)) {
+            throw 'Windows install/rollback verification did not complete'
+          }
+          $qaResult = (Get-Content -LiteralPath $qaMarker -Raw).Trim()
+          if ($qaResult -ne 'PASS: actual Release installed and exact original 36-file fixture restored') {
+            throw "Windows install/rollback verification returned: $qaResult"
+          }
+          Write-Host $qaResult
 
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

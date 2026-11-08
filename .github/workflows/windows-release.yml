@@ -483,30 +483,78 @@ jobs:
           & $fixture | Tee-Object checks/SPAWN_INI_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual script INI differential failed' }
 
-      - name: Verify actual CInifile and package the exact Release
+      # Split post-build QA: each stage has an observable start and a timeout.
+      - name: Check Release xrCore and spawn fixtures
         shell: pwsh
+        timeout-minutes: 5
         run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'START: core fixture'
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_audit_core_test.exe | Tee-Object checks/PUBLIC_ACTUAL_CORE.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore fixture failed' }
+          Write-Host 'START: spawn plan fixture'
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_plan_fixture.exe | Tee-Object checks/SPAWN_PLAN_NATIVE.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore switch-key differential failed' }
+          Write-Host 'START: voice catalogue fixture'
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_voice_catalog.exe | Tee-Object checks/SPAWN_VOICE_CATALOG_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Actual xrCore voice catalogue differential failed' }
+          Write-Host 'START: contact fixture'
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_contact_fixture.exe | Tee-Object checks/SPAWN_CONTACT_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Static contact differential failed' }
+          Write-Host 'START: spawn admission fixture'
           & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_admission_fixture.exe | Tee-Object checks/SPAWN_ADMISSION_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Detached spawn admission differential failed' }
+
+      - name: Check detached binder replay with actual LuaJIT
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
           $env:IXRAY_SPAWN_PREPARE = '1'
-          & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Detached voice binder replay failed' }
-          Remove-Item Env:IXRAY_SPAWN_PREPARE
+          try {
+            Write-Host 'START: ixray_spawn_mainline_replay'
+            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_BINDER_REPLAY.txt
+            if ($LASTEXITCODE -ne 0) { throw 'Detached voice binder replay failed' }
+          } finally {
+            Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
+          }
+
+      - name: Check sealed sources and package exact Release
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'START: engine_inputs'
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Source identity changed during compilation' }
+          Write-Host 'START: package'
           python ci/package.py
           if ($LASTEXITCODE -ne 0) { throw 'Release package failed' }
-          Invoke-WebRequest https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip -OutFile checks/python-embed.zip
-          python ci/spawn-path/package_capture.py
+
+      - name: Download embedded Python for capture tooling
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'START: python-embed download'
+          Invoke-WebRequest https://www.python.org/ftp/python/3.13.17/python-3.13.17-embed-amd64.zip -OutFile checks/python-embed.zip -TimeoutSec 120
+          if (-not (Test-Path checks/python-embed.zip)) { throw 'Python runtime missing' }
+
+      - name: Create capture symbol indices and seal full package
+        shell: pwsh
+        timeout-minutes: 15
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'START: capture symbol indexing'
+          python -u ci/spawn-path/package_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'Spawn path capture package failed' }
+
+      - name: Validate packaged Release install and rollback
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host 'START: full installer QA'
           & ci/verify_package.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows install or rollback failed' }
 

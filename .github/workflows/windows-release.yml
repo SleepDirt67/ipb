@@ -369,7 +369,15 @@ jobs:
           $env:IXRAY_SPAWN_PREPARE = '1'
           try {
             Write-Host 'START: early replay; [REPLAY] markers pinpoint startup, individual Lua modes, and teardown'
+            $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+            if (-not $lua) { throw 'LuaJIT import library missing' }
+            $runtime = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+            if ((Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash.ToLower() -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
+            $exeDir = 'ixray/build/x64/Engine-Windows/bin/Release'
+            Copy-Item -LiteralPath $runtime -Destination $exeDir -Force
+            Write-Host 'Pinned LuaJIT runtime staged alongside replay executable'
             & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua ci/spawn-mainline/voice_replay.lua | Tee-Object checks/SPAWN_VOICE_PREFLIGHT.txt
+            Write-Host "Replay process exit code: $LASTEXITCODE"
             if ($LASTEXITCODE -ne 0) { throw 'Early binder replay failed' }
           } finally {
             Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue

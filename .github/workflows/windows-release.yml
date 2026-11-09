@@ -438,8 +438,9 @@ jobs:
           Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
           $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
           $reference = $null
-          foreach ($heap in @(0,240000)) {
-            $env:IXRAY_REPLAY_LIVE_USERDATA = "$heap"
+          $env:IXRAY_REPLAY_LIVE_USERDATA = "0"
+          foreach ($prior in @(0,2276,6828)) {
+            $env:IXRAY_REPLAY_REGISTERED = "$prior"
             $variants = @('original','indexed','indexed','original')
             foreach ($variant in $variants) {
               $env:IXRAY_REPLAY_INDEXED = if ($variant -eq "indexed") { "1" } else { "0" }
@@ -448,7 +449,7 @@ jobs:
               $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {
                 "$variant $($_.Line)" | Tee-Object -FilePath checks/SPAWN_GC_CONNECTED.txt -Append
               }
-              $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+)')
+              $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+), order (\d+)')
               if (-not $state.Success) { throw 'Missing connected replay state checksum' }
               if ($null -eq $reference) { $reference = $state.Value }
               if ($state.Value -ne $reference) { throw 'Connected spawn state or IO diverged' }

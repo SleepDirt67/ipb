@@ -11,11 +11,21 @@ using ref_sound = bool;
 
 std::unordered_set<std::string> cohortSources;
 unsigned cohortOpens;
+std::uint64_t cohortCollectionOrder;
+constexpr std::uint64_t orderSeed = 14695981039346656037ull;
+
+std::uint64_t HashText(std::uint64_t hash, const char* text)
+{
+    while (*text)
+        hash = (hash ^ static_cast<unsigned char>(*text++)) * 1099511628211ull;
+    return hash * 1099511628211ull;
+}
 bool indexedCollections;
 
 struct ReplayCollection
 {
     u32 m_last_sound_id;
+    std::uint64_t variantOrder = orderSeed;
     xr_vector<ref_sound*> m_sounds;
     explicit ReplayCollection(const CohortSoundParams& params)
     {
@@ -23,6 +33,8 @@ struct ReplayCollection
             BuildIndexed(params);
         else
             BuildOriginal(params);
+        if (!m_sounds.empty())
+            cohortCollectionOrder += HashText(HashText(variantOrder, *params.m_sound_prefix), *params.m_sound_player_prefix);
     }
     void BuildOriginal(const CohortSoundParams& params);
     void BuildIndexed(const CohortSoundParams& params);
@@ -30,6 +42,7 @@ struct ReplayCollection
     ref_sound* add(ESoundTypes, const char* name)
     {
         static ref_sound value = true;
+        variantOrder = HashText(variantOrder, name);
         if (!cohortSources.emplace(name).second)
             return &value;
         const std::string file = std::string(name) + ".ogg";
@@ -167,8 +180,12 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
     Require(userdata <= 480000, "bounded fixture heap");
     const auto* indexed = std::getenv("IXRAY_REPLAY_INDEXED");
     indexedCollections = indexed && indexed[0] == '1';
+    const auto* registered = std::getenv("IXRAY_REPLAY_REGISTERED");
+    const auto priorKeys = registered ? static_cast<unsigned>(std::strtoul(registered, nullptr, 10)) : 6828;
+    Require(priorKeys <= 6828, "bounded fixture registry");
     std::vector<double> cold, warm;
     unsigned checksum = 0, measuredOpens = 0;
+    std::uint64_t orderChecksum = 0;
     for (unsigned trial = 0; trial < 15; ++trial)
     {
         auto* L = luaL_newstate();
@@ -190,18 +207,22 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         else
             baselineStorage = std::make_unique<BaselineStorage>();
         // Model a played session with thousands of distinct existing keys.
-        for (unsigned i = 0; i < 6828; ++i)
+        for (unsigned i = 0; i < priorKeys; ++i)
         {
             const auto id = "fixture_previous_" + std::to_string(i);
             ResolveCollection({id.c_str(), "characters_voice\\cohort_0\\", 64, SOUND_TYPE_TALKING});
         }
         cohortOpens = 0;
+        cohortCollectionOrder = 0;
         cohortApplied = 0;
         const auto start = std::chrono::steady_clock::now();
         Load(L, "run_cohort()", false);
         const auto bound = std::chrono::steady_clock::now();
         cold.push_back(std::chrono::duration<double, std::milli>(bound - start).count());
         measuredOpens = cohortOpens;
+        if (trial)
+            Require(orderChecksum == cohortCollectionOrder, "repeat collection variant order");
+        orderChecksum = cohortCollectionOrder;
         Require(registrations == 569 * 9, "stock registration count");
         Require(cohortApplied == (admittedPlan ? 569 * 9 : 0), "native phase coverage");
         registrations = 0;
@@ -220,12 +241,12 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         indexedStorage.reset();
     }
     for (unsigned trial = 0; trial < cold.size(); ++trial)
-        std::printf("REPLAY: live %u, trial %u, cold %.3f ms, warm %.3f ms\n",
-            userdata, trial, cold[trial], warm[trial]);
+        std::printf("REPLAY: prior %u, live %u, trial %u, cold %.3f ms, warm %.3f ms\n",
+            priorKeys, userdata, trial, cold[trial], warm[trial]);
     std::sort(cold.begin(), cold.end());
     std::sort(warm.begin(), warm.end());
-    std::printf("COHORT: 9 x 569 themes, 29 item reads, %u real opens, state %u, cold %.3f ms, warm %.3f ms\n",
-        measuredOpens, checksum, cold[cold.size() / 2], warm[warm.size() / 2]);
+    std::printf("COHORT: 9 x 569 themes, 29 item reads, %u real opens, state %u, order %llu, cold %.3f ms, warm %.3f ms\n",
+        measuredOpens, checksum, static_cast<unsigned long long>(orderChecksum), cold[cold.size() / 2], warm[warm.size() / 2]);
     admittedPlan.reset();
     FS._destroy();
     Core._destroy();

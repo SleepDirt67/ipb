@@ -1,0 +1,4 @@
+cmake_minimum_required(VERSION 3.16)
+project(ixray_packed_view_check LANGUAGES CXX)
+add_executable(ixray_packed_view_check packed_view_check.cpp)
+target_compile_features(ixray_packed_view_check PRIVATE cxx_std_17)

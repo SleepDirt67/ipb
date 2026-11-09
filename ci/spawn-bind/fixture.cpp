@@ -42,27 +42,32 @@ template<class Vector> void delete_data(Vector& pairs)
 #include "IndexedStorage.inc"
 
 template<class Storage>
-static void CompareReentry()
+static void CompareReentry(unsigned prefill)
 {
     Storage storage;
     using Collection = CSoundPlayer::CSoundCollection;
     Collection::next = 0;
+    std::vector<unsigned> keys(prefill);
+    for (auto& key : keys)
+        storage.object({{&key}, {}, 64, 3});
+    unsigned bridge = 0;
     bool nested = false;
     Collection::reenter = [&](const auto& params) {
         if (!nested)
         {
             nested = true;
-            if (storage.object(params).second->id != 2) std::abort();
+            if (storage.object({{&bridge}, {}, 64, 3}).second->id != prefill + 2) std::abort();
+            if (storage.object(params).second->id != prefill + 3) std::abort();
         }
     };
     CSoundPlayer::CSoundCollectionParams params{{}, {}, 64, 3};
-    if (storage.object(params).second->id != 1 || storage.object(params).second->id != 2)
+    if (storage.object(params).second->id != prefill + 1 || storage.object(params).second->id != prefill + 3)
         std::abort();
     Collection::reenter = {};
     params.m_type = 4;
-    if (storage.object(params).second->id != 3) std::abort();
+    if (storage.object(params).second->id != prefill + 4) std::abort();
     params.m_max_count = 63;
-    if (storage.object(params).second->id != 4) std::abort();
+    if (storage.object(params).second->id != prefill + 5) std::abort();
 }
 
 template<class Storage>
@@ -85,8 +90,11 @@ static std::pair<double, unsigned> Replay(unsigned profiles)
 
 int main()
 {
-    CompareReentry<BaselineStorage>();
-    CompareReentry<IndexedStorage>();
+    for (const unsigned prefill : {0u, 2047u, 2048u})
+    {
+        CompareReentry<BaselineStorage>(prefill);
+        CompareReentry<IndexedStorage>(prefill);
+    }
     std::vector<double> a, b;
     for (unsigned i = 0; i < 13; ++i)
     {

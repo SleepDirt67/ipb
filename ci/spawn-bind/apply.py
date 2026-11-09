@@ -41,12 +41,37 @@ if old_body.count("std::find_if") != 1 or old_body.count("m_objects.back()") != 
     raise ValueError("Sound collection lookup source drift")
 new_body = old_body[:old_body.index("\n{")] + '''
 {
-    if (const auto found = m_index.find(params); found != m_index.end())
+    // Small registries avoid allocating a second container for cold misses.
+    constexpr size_t IndexThreshold = 2048;
+    if (m_index.empty() && m_objects.size() >= IndexThreshold)
+    {
+        decltype(m_index) index;
+        index.reserve(m_objects.size());
+        for (size_t i = 0; i < m_objects.size(); ++i)
+            index.try_emplace(m_objects[i].first, i);
+        m_index.swap(index);
+    }
+
+    if (m_index.empty())
+    {
+        const auto found = std::find_if(m_objects.begin(), m_objects.end(), [&](const auto& entry) {
+            return entry.first == params;
+        });
+        if (found != m_objects.end())
+            return *found;
+    }
+    else if (const auto found = m_index.find(params); found != m_index.end())
         return m_objects[found->second];
 
-    // Construct first. A nested registration can publish the same key during
-    // construction. Its earlier vector entry must remain the first match.
+    // Construct first. A nested registration can publish the same key or
+    // build the index. Its earlier vector entry remains the first match.
     std::unique_ptr<CSoundCollection> collection(new CSoundCollection(params));
+    if (m_index.empty())
+    {
+        m_objects.emplace_back(params, collection.get());
+        collection.release();
+        return m_objects.back();
+    }
     const auto slot = m_index.try_emplace(params, m_objects.size());
     try
     {

@@ -1,6 +1,6 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
-  ".github/workflows/windows-release.yml": "72dc7615554206d962b32e50dfdc8f9037980cc0b7ecd71ffe8323949ee9fe82",
+  ".github/workflows/windows-release.yml": "5b72c84595349ed39c2bfa46d73c6ea63a6a15867d29fea4db2173e8217c9c47",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -32,6 +32,10 @@
   "ci/spawn-archives/apply.py": "d45fa87adf45dbaac08ca06e3d8d27f7b9297bd3de14ea2429bf51bf13cefb28",
   "ci/spawn-archives/engine_archive_check.cpp": "904bbd647e7eeaafaa99680599f5bfdb765ba9b017aae482e27215c8bbfd37ea",
   "ci/spawn-archives/packed_view_check.cpp": "27a163a06c0ccfd21a212b907e1a304975ffc71807868379b8b256aa53283991",
+  "ci/spawn-cohort-replay/CohortResourceReplay.inc": "981224001c7e8d6413051e48f42175c096da20e540d096925cc6d33e34d0f2ea",
+  "ci/spawn-cohort-replay/apply.py": "24c6c4d8e5a4514f1ca69320c711e38bed2d8451ea710dd56024f1b4bdc97f83",
+  "ci/spawn-cohort-replay/cohort_fixture.py": "1fe07e843ec3e4f55acbfcac224d1ff09602dbe95ac001614a49a329fcdd171d",
+  "ci/spawn-cohort-replay/cohort_run.lua": "4024451c89e6f1665f0da472f744ac463e172068d64062b52259d50eb08f7120",
   "ci/spawn-cohort/SpawnWavePromotion.inc": "a466de29909c1f7404c0ac2e81d3fc7a45ef463ccc5fb6a5040e48b062a39207",
   "ci/spawn-cohort/apply.py": "48c1e8d0167f438680c5c436f700833802b7a2a0e337bb3340cf9e6e53a7308e",
   "ci/spawn-coverage/LuaSourceFragment.h": "596a8eb63fc6794264a1ae167b7fe5d968bb49961211b97918f7e211ee55fd74",

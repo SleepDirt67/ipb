@@ -1,7 +1,7 @@
 name: IX-Ray Windows x64 spawn admission experiment
 on:
   push:
-    branches: ['experiment/spawn-packed-engine-136']
+    branches: ['experiment/spawn-cohort-replay-136']
   workflow_dispatch:
 permissions:
   contents: read
@@ -381,6 +381,14 @@ jobs:
           target_link_libraries(ixray_engine_archive_check PRIVATE xrCore)
           '@ | Add-Content ixray/CMakeLists.txt -Encoding utf8
 
+      - name: Generate stock theme and model the complete mixed resource cohort
+        shell: pwsh
+        run: |
+          python ci/spawn-cohort-replay/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Cohort native extraction failed' }
+          python ci/spawn-cohort-replay/cohort_fixture.py ixray checks/cohort
+          if ($LASTEXITCODE -ne 0) { throw 'Stock cohort generation failed' }
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -390,15 +398,26 @@ jobs:
 
       # Fail a broken replay before the full engine is compiled.
 
-      - name: Compare original and shared readers in actual xrCore
+      - name: Compare stock and prepared Lua and packed assets in the same cohort
         shell: pwsh
         run: |
-          cmake --build ixray/build/x64/Engine-Windows --config Release --target ixray_engine_archive_check --parallel 4
-          if ($LASTEXITCODE -ne 0) { throw 'Packed xrCore compile failed' }
-          $fixture = 'ixray/build/x64/Engine-Windows/bin/Release/ixray_engine_archive_check.exe'
+          cmake --build ixray/build/x64/Engine-Windows --config Release --target ixray_spawn_mainline_replay --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Cohort compile failed' }
+          $bin = 'ixray/build/x64/Engine-Windows/bin/Release'
+          $fixture = "$bin/ixray_spawn_mainline_replay.exe"
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') "$bin/lua51.dll" -Force
+          $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
           $env:IXRAY_SPAWN_PREPARE = '0'
-          & $fixture original
-          if ($LASTEXITCODE -ne 0) { throw 'Original packed reader failed' }
+          $control = & $fixture --cohort checks/spawn-mainline/stock.lua @argsCommon
+          if ($LASTEXITCODE -ne 0) { throw 'Stock cohort failed' }
+          $control | Select-String '^COHORT:'
           Remove-Item Env:IXRAY_SPAWN_PREPARE
-          & $fixture shared
-          if ($LASTEXITCODE -ne 0) { throw 'Shared packed reader failed' }
+          $candidate = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
+          if ($LASTEXITCODE -ne 0) { throw 'Prepared cohort failed' }
+          $candidate | Select-String '^COHORT:'
+          $state = '(\d+) real opens, state (\d+)'
+          $a = [regex]::Match(($control -join "`n"), $state)
+          $b = [regex]::Match(($candidate -join "`n"), $state)
+          if (-not $a.Success -or -not $b.Success -or $a.Value -ne $b.Value) { throw 'Cohort state diverged' }

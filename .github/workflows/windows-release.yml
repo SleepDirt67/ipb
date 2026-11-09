@@ -359,6 +359,18 @@ jobs:
           cmake --preset Engine-x64-Windows "-DFETCHCONTENT_SOURCE_DIR_LUABIND=$env:GITHUB_WORKSPACE/ixray/build/x64/Engine-Windows/_deps/luabind-src"
           if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
 
+      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c') { throw 'Lua runtime mismatch' }
+          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
+          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
+          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
+
       - name: Seal transformed engine sources
         run: python ci/engine_inputs.py --seal
 

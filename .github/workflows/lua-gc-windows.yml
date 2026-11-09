@@ -101,6 +101,13 @@ jobs:
               }
             }
           }
+          foreach ($count in @(60000,240000,480000)) {
+            foreach ($variant in @('stock','candidate')) {
+              $samples = & "gc-$variant/gc_step_bench.exe" $count
+              if ($LASTEXITCODE -ne 0) { throw "$variant incremental GC replay failed" }
+              $samples | ForEach-Object { "$variant $_" } | Tee-Object -FilePath gc-results/incremental.txt -Append
+            }
+          }
           Get-FileHash gc-stock/lua51.dll,gc-candidate/lua51.dll | Out-String | Tee-Object -FilePath gc-results/runtimes.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

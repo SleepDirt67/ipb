@@ -1,7 +1,7 @@
-name: IX-Ray Windows x64 spawn admission experiment
+name: Windows connected spawn path with original and indexed LuaJIT
 on:
   push:
-    branches: ['experiment/spawn-cohort-replay-136']
+    branches: ['lab/spawn-connected-lua-gc-136']
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   compile:
-    name: Windows x64 / gameplay stall fixes, regression tests and complete package
+    name: Connected spawn cohort replay under fragmented Lua heaps
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
@@ -396,34 +396,67 @@ jobs:
           cmake --preset Engine-x64-Windows "-DFETCHCONTENT_SOURCE_DIR_LUABIND=$env:GITHUB_WORKSPACE/ixray/build/x64/Engine-Windows/_deps/luabind-src"
           if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
 
-      # Fail a broken replay before the full engine is compiled.
+      - name: Checkout the LuaJIT revision used by the IX-Ray package
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: LuaJIT/LuaJIT
+          ref: dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268
+          path: luajit
+          persist-credentials: false
 
-      - name: Compare stock and prepared Lua and packed assets in the same cohort
+      - name: Checkout the pinned IX-Ray LuaJIT packaging recipe
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: imesense/packages-collection
+          ref: 02c62d81bc3ab8a46c37efa3c13af3217afa9e08
+          path: recipe
+          persist-credentials: false
+
+      - name: Retain the original runtime and build the ABI-checked indexed LuaJIT
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib
+          if (@($lua).Count -ne 1) { throw 'Lua import library missing or ambiguous' }
+          $runtime = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          Copy-Item -LiteralPath $runtime checks/original-lua51.dll
+          ./ci/lua-gc/build_engine_runtime.ps1
+
+      - name: Compare only the LuaJIT runtime in the same connected spawn replay
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
           cmake --build ixray/build/x64/Engine-Windows --config Release --target ixray_spawn_mainline_replay --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'Cohort compile failed' }
           $bin = 'ixray/build/x64/Engine-Windows/bin/Release'
           $fixture = "$bin/ixray_spawn_mainline_replay.exe"
-          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
-          if (-not $lua) { throw 'Lua import library missing' }
-          Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') "$bin/lua51.dll" -Force
+          $sources = @{original = 'checks/original-lua51.dll'; indexed = 'gc-build/bin/Release/lua51.dll'}
+          Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
           $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
-          $env:IXRAY_SPAWN_PREPARE = '0'
-          $stock = & $fixture --cohort checks/spawn-mainline/stock.lua @argsCommon
-          if ($LASTEXITCODE -ne 0) { throw 'Unmodified stock cohort failed' }
-          Write-Host 'UNMODIFIED STOCK'
-          $stock | Select-String '^COHORT:'
-          $control = & $fixture --cohort checks/spawn-mainline/previous.lua @argsCommon
-          Write-Host 'PLAYED FALLBACK, PREPARATION DISABLED'
-          if ($LASTEXITCODE -ne 0) { throw 'Stock cohort failed' }
-          $control | Select-String '^COHORT:'
-          Remove-Item Env:IXRAY_SPAWN_PREPARE
-          $candidate = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
-          if ($LASTEXITCODE -ne 0) { throw 'Prepared cohort failed' }
-          Write-Host 'PREPARED, ORDINARY LAUNCH'
-          $candidate | Select-String '^COHORT:'
-          $state = '(\d+) real opens, state (\d+)'
-          $a = [regex]::Match(($control -join "`n"), $state)
-          $b = [regex]::Match(($candidate -join "`n"), $state)
-          if (-not $a.Success -or -not $b.Success -or $a.Value -ne $b.Value) { throw 'Cohort state diverged' }
+          $reference = $null
+          foreach ($heap in @(0,60000,240000)) {
+            $env:IXRAY_REPLAY_LIVE_USERDATA = "$heap"
+            $variants = if ($heap -eq 60000) { @('indexed','original') } else { @('original','indexed') }
+            foreach ($variant in $variants) {
+              Copy-Item -LiteralPath $sources[$variant] -Destination "$bin/lua51.dll" -Force
+              $sample = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
+              if ($LASTEXITCODE -ne 0) { throw "$variant connected replay failed" }
+              $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {
+                "$variant $($_.Line)" | Tee-Object -FilePath checks/SPAWN_GC_CONNECTED.txt -Append
+              }
+              $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+)')
+              if (-not $state.Success) { throw 'Missing connected replay state checksum' }
+              if ($null -eq $reference) { $reference = $state.Value }
+              if ($state.Value -ne $reference) { throw 'Connected spawn state or IO diverged' }
+            }
+          }
+
+      - name: Upload connected path results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: IXRay-LuaJIT-Connected-Spawn-Comparison
+          path: |
+            checks/SPAWN_GC_CONNECTED.txt
+            checks/LUAJIT_RUNTIME.json
+          retention-days: 14

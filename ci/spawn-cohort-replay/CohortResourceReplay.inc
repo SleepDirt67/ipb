@@ -59,6 +59,48 @@ static int ReadCohortItem(lua_State* L)
     return 0;
 }
 
+// The game already has a long-lived VM when a batch arrives. Group the
+// roots to avoid adding one large Lua table as an artificial atomic task.
+static void SeedCohortGc(lua_State* L, unsigned count, unsigned trial)
+{
+    if (!count)
+        return;
+    lua_gc(L, LUA_GCSTOP, 0);
+    constexpr unsigned groupSize = 96;
+    const unsigned groups = (count + groupSize - 1) / groupSize;
+    lua_createtable(L, static_cast<int>(groups), 0);
+    const int roots = lua_gettop(L);
+    uint32_t random = 1;
+    const auto bytes = [&]() {
+        random = random * 1664525u + 1013904223u;
+        return 8u + ((random >> 18) & 31u) * 16u;
+    };
+    for (unsigned group = 0; group < groups; ++group)
+    {
+        const auto size = std::min(groupSize, count);
+        lua_createtable(L, static_cast<int>(size), 0);
+        const int slots = lua_gettop(L);
+        for (unsigned slot = 1; slot <= size; ++slot)
+        {
+            lua_newuserdata(L, bytes());
+            lua_rawseti(L, slots, static_cast<int>(slot));
+            if (slot % 5 == 0)
+            {
+                lua_newuserdata(L, bytes());
+                lua_pop(L, 1);
+            }
+        }
+        lua_rawseti(L, roots, static_cast<int>(group + 1));
+        count -= size;
+    }
+    lua_setglobal(L, "fixture_gc_roots");
+    lua_gc(L, LUA_GCCOLLECT, 0);
+    // Sweep across initial GC phases instead of choosing one phase which
+    // favors a runtime. Both DLLs receive the same number of stock steps.
+    for (unsigned step = 0; step < trial * 20; ++step)
+        lua_gc(L, LUA_GCSTEP, 0);
+}
+
 static int RunCohort(const char* voice, const char* themes, const char* files, const char* input)
 {
     const auto root = std::filesystem::absolute("cohort-spawn-replay");
@@ -104,6 +146,9 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
     FS.prepare_spawn_voice_catalogue();
     admittedPlan = FS.acquire_spawn_voice_catalogue();
 
+    const char* pressure = std::getenv("IXRAY_REPLAY_LIVE_USERDATA");
+    const auto userdata = pressure ? static_cast<unsigned>(std::strtoul(pressure, nullptr, 10)) : 0;
+    Require(userdata <= 480000, "bounded fixture heap");
     std::vector<double> cold, warm;
     unsigned checksum = 0, measuredOpens = 0;
     for (unsigned trial = 0; trial < 15; ++trial)
@@ -119,6 +164,7 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         lua_pushstring(L, themes);
         lua_setglobal(L, "themes_file");
         Load(L, input, true);
+        SeedCohortGc(L, userdata, trial);
 
         cohortSources.clear();
         cohortCollections.clear();
@@ -144,6 +190,9 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         registrations = 0;
         lua_close(L);
     }
+    for (unsigned trial = 0; trial < cold.size(); ++trial)
+        std::printf("REPLAY: live %u, trial %u, cold %.3f ms, warm %.3f ms\n",
+            userdata, trial, cold[trial], warm[trial]);
     std::sort(cold.begin(), cold.end());
     std::sort(warm.begin(), warm.end());
     std::printf("COHORT: 9 x 569 themes, 29 item reads, %u real opens, state %u, cold %.3f ms, warm %.3f ms\n",

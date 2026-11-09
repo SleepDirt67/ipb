@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.22)
+project(IXRayLuaGCReplay LANGUAGES C)
+foreach(fixture IN ITEMS binder_gc_bench close_gc_check)
+    add_executable(${fixture} ${fixture}.c)
+    target_include_directories(${fixture} PRIVATE "${LUA_HEADERS}")
+    target_link_libraries(${fixture} PRIVATE "${LUA_IMPORT}")
+    target_compile_features(${fixture} PRIVATE c_std_11)
+endforeach()

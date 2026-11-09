@@ -352,6 +352,13 @@ jobs:
           python ci/spawn-critical/prepare_smart_jobs.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Job preparation overlay failed' }
 
+      - name: Prepare fused stock binder queries and collection lookups
+        run: |
+          python ci/spawn-bridge/apply.py ixray checks/spawn-bridge
+          if ($LASTEXITCODE -ne 0) { throw 'Stock binder overlay failed' }
+          python ci/spawn-bridge/collection_index.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Collection index overlay failed' }
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -378,7 +385,7 @@ jobs:
         shell: pwsh
         working-directory: ixray
         run: |
-          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_spawn_admission_fixture --parallel 4
+          cmake --build --preset Engine-x64-Windows-Release --target xrEngine xrRender_R4 ixray_spawn_admission_fixture ixray_spawn_mainline_replay --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'CMake build failed' }
 
       - name: Run detached geometry and queue differential
@@ -388,3 +395,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native activation differential failed' }
           python ci/engine_inputs.py
           if ($LASTEXITCODE -ne 0) { throw 'Transformed input seal changed' }
+
+      - name: Measure stock community resolution and verify Lua fallbacks
+        shell: pwsh
+        env:
+          IXRAY_SPAWN_PREPARE: "1"
+        run: |
+          $bin = "ixray/build/x64/Engine-Windows/bin/Release"
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          Copy-Item -LiteralPath $dll -Destination "$bin/lua51.dll" -Force
+          & "$bin/ixray_spawn_mainline_replay.exe" --community checks/spawn-bridge/community-stock.lua checks/spawn-bridge/community-candidate.lua
+          if ($LASTEXITCODE -ne 0) { throw 'Community differential failed' }

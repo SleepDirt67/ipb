@@ -1,6 +1,6 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
-  ".github/workflows/windows-release.yml": "b85ab6cc1634c79b22ba46f8a684146e3a05d81de759b760e66512f154e94dba",
+  ".github/workflows/windows-release.yml": "a3b5c9c9e4d84bdf7a8414047f56099c79add087852e87ece4125fe05cc5327d",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -36,6 +36,7 @@
   "ci/spawn-coverage/fragment_fixture.cpp": "570e64b91a993f121b922e954eb0a82027aa932d4a48efd0847808ee9bcbf512",
   "ci/spawn-coverage/lua.py": "898ea7afededfbfce4bd7a6887330c6cf1dfd8489b4b94d1e9ca50e4ba10950f",
   "ci/spawn-critical/prepare_model_bases.py": "1d6bb0e0055278d5cd23ee86d279d19b3ce448cfed61b9209a045fc9579c9d70",
+  "ci/spawn-critical/prepare_render_history.py": "651bdb015ff704126ba0be2491974c80d8c9debebc078dff439f3681cec5f23b",
   "ci/spawn-critical/prepare_smart_jobs.py": "f811909b3b5354a45c76cd681bcf6f6d8bf29c1320ac0703eb0a1b1d9a9a73d9",
   "ci/spawn-enable/SpawnPreparationConfig.h": "2ee923469a5828e326216660aa8eadb9539d34381e609dd70131611d8a796b84",
   "ci/spawn-enable/apply.py": "f1b820ad7be88e5bf5d29b7a406e5732598005aa05f7c3f7e260b3938625ce3f",

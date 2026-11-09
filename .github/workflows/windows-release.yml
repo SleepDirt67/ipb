@@ -350,6 +350,8 @@ jobs:
         run: |
           python ci/spawn-critical/prepare_model_bases.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Model preparation overlay failed' }
+          python ci/spawn-critical/prepare_render_history.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Render history overlay failed' }
           python ci/spawn-critical/prepare_smart_jobs.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Job preparation overlay failed' }
           python ci/spawn-cohort/apply.py ixray

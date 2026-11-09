@@ -178,16 +178,17 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
     const char* pressure = std::getenv("IXRAY_REPLAY_LIVE_USERDATA");
     const auto userdata = pressure ? static_cast<unsigned>(std::strtoul(pressure, nullptr, 10)) : 0;
     Require(userdata <= 480000, "bounded fixture heap");
-    const auto* indexed = std::getenv("IXRAY_REPLAY_INDEXED");
-    indexedCollections = indexed && indexed[0] == '1';
     const auto* registered = std::getenv("IXRAY_REPLAY_REGISTERED");
     const auto priorKeys = registered ? static_cast<unsigned>(std::strtoul(registered, nullptr, 10)) : 6828;
     Require(priorKeys <= 6828, "bounded fixture registry");
-    std::vector<double> cold, warm;
+    std::vector<double> cold[2], warm[2];
     unsigned checksum = 0, measuredOpens = 0;
     std::uint64_t orderChecksum = 0;
-    for (unsigned trial = 0; trial < 15; ++trial)
+    for (unsigned trial = 0; trial < 80; ++trial)
     {
+        // Both versions share this executable, archive mount and OS cache.
+        indexedCollections = trial % 4 == 1 || trial % 4 == 2;
+        const auto variant = indexedCollections ? 1 : 0;
         auto* L = luaL_newstate();
         Require(L != nullptr, "fresh script VM");
         luaL_openlibs(L);
@@ -199,7 +200,7 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         lua_pushstring(L, themes);
         lua_setglobal(L, "themes_file");
         Load(L, input, true);
-        SeedCohortGc(L, userdata, trial);
+        SeedCohortGc(L, userdata, trial / 2);
 
         cohortSources.clear();
         if (indexedCollections)
@@ -218,7 +219,9 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         const auto start = std::chrono::steady_clock::now();
         Load(L, "run_cohort()", false);
         const auto bound = std::chrono::steady_clock::now();
-        cold.push_back(std::chrono::duration<double, std::milli>(bound - start).count());
+        cold[variant].push_back(std::chrono::duration<double, std::milli>(bound - start).count());
+        if (trial)
+            Require(measuredOpens == cohortOpens, "repeat archive open count");
         measuredOpens = cohortOpens;
         if (trial)
             Require(orderChecksum == cohortCollectionOrder, "repeat collection variant order");
@@ -228,11 +231,14 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         registrations = 0;
         Load(L, "replay_sum = compare_cohort()", false);
         lua_getglobal(L, "replay_sum");
-        checksum = static_cast<unsigned>(lua_tointeger(L, -1));
+        const auto state = static_cast<unsigned>(lua_tointeger(L, -1));
+        if (trial)
+            Require(checksum == state, "repeat connected state checksum");
+        checksum = state;
         lua_pop(L, 1);
         const auto restart = std::chrono::steady_clock::now();
         Load(L, "run_cohort()", false);
-        warm.push_back(std::chrono::duration<double, std::milli>(
+        warm[variant].push_back(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - restart).count());
         Require(registrations == 569 * 9, "warm registration count");
         registrations = 0;
@@ -240,13 +246,15 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         baselineStorage.reset();
         indexedStorage.reset();
     }
-    for (unsigned trial = 0; trial < cold.size(); ++trial)
-        std::printf("REPLAY: prior %u, live %u, trial %u, cold %.3f ms, warm %.3f ms\n",
-            priorKeys, userdata, trial, cold[trial], warm[trial]);
-    std::sort(cold.begin(), cold.end());
-    std::sort(warm.begin(), warm.end());
-    std::printf("COHORT: 9 x 569 themes, 29 item reads, %u real opens, state %u, order %llu, cold %.3f ms, warm %.3f ms\n",
-        measuredOpens, checksum, static_cast<unsigned long long>(orderChecksum), cold[cold.size() / 2], warm[warm.size() / 2]);
+    for (unsigned variant = 0; variant < 2; ++variant)
+    {
+        const auto* name = variant ? "indexed" : "original";
+        for (unsigned trial = 0; trial < cold[variant].size(); ++trial)
+            std::printf("REPLAY: %s, prior %u, live %u, trial %u, cold %.3f ms, warm %.3f ms\n",
+                name, priorKeys, userdata, trial, cold[variant][trial], warm[variant][trial]);
+    }
+    std::printf("COHORT: 9 x 569 themes, 29 item reads, %u real opens, state %u, order %llu\n",
+        measuredOpens, checksum, static_cast<unsigned long long>(orderChecksum));
     admittedPlan.reset();
     FS._destroy();
     Core._destroy();

@@ -441,19 +441,15 @@ jobs:
           $env:IXRAY_REPLAY_LIVE_USERDATA = "0"
           foreach ($prior in @(0,2276,6828)) {
             $env:IXRAY_REPLAY_REGISTERED = "$prior"
-            $variants = @('original','indexed','indexed','original')
-            foreach ($variant in $variants) {
-              $env:IXRAY_REPLAY_INDEXED = if ($variant -eq "indexed") { "1" } else { "0" }
-              $sample = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
-              if ($LASTEXITCODE -ne 0) { throw "$variant connected replay failed" }
-              $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {
-                "$variant $($_.Line)" | Tee-Object -FilePath checks/SPAWN_GC_CONNECTED.txt -Append
-              }
-              $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+), order (\d+)')
-              if (-not $state.Success) { throw 'Missing connected replay state checksum' }
-              if ($null -eq $reference) { $reference = $state.Value }
-              if ($state.Value -ne $reference) { throw 'Connected spawn state or IO diverged' }
+            $sample = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
+            if ($LASTEXITCODE -ne 0) { throw 'Paired connected replay failed' }
+            $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {
+              $_.Line | Tee-Object -FilePath checks/SPAWN_GC_CONNECTED.txt -Append
             }
+            $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+), order (\d+)')
+            if (-not $state.Success) { throw 'Missing connected replay state checksum' }
+            if ($null -eq $reference) { $reference = $state.Value }
+            if ($state.Value -ne $reference) { throw 'Connected spawn state or IO diverged' }
           }
 
       - name: Upload connected path results

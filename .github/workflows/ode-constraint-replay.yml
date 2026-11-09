@@ -1,0 +1,33 @@
+name: Compare ODE constraint row implementations
+on:
+  push:
+    branches: ['lab/ode-row-136']
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: ixray-team/ixray-1.6-stcop
+          ref: 612b165c97d5e6a50ac0a6d1384ac8c95a63dda5
+          path: ixray
+          persist-credentials: false
+      - name: Compare the exact SOR loop with single-row SIMD
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path generated | Out-Null
+          python ci/ode-row/extract.py ixray/src/3rd-party/ode/ode/src/quickstep.cpp generated
+          if ($LASTEXITCODE -ne 0) { throw 'SOR extraction failed' }
+          cmake -S ci/ode-row -B checks/ode-row -A x64 "-DGENERATED=$env:GITHUB_WORKSPACE/generated"
+          if ($LASTEXITCODE -ne 0) { throw 'SOR configure failed' }
+          cmake --build checks/ode-row --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'SOR compilation failed' }
+          & checks/ode-row/Release/ode_constraint_replay.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Force accumulator changed solver results' }

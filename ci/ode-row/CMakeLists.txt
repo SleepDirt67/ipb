@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(IXRayODEConstraintReplay LANGUAGES CXX)
+add_executable(ode_constraint_replay check.cpp)
+target_include_directories(ode_constraint_replay PRIVATE "${GENERATED}")
+target_compile_features(ode_constraint_replay PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(ode_constraint_replay PRIVATE /fp:fast)
+endif()

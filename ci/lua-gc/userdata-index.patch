@@ -1,5 +1,14 @@
 --- a/src/lj_obj.h
 +++ b/src/lj_obj.h
+@@ -321,7 +321,7 @@
+   GCRef env;		/* Should be at same offset in GCfunc. */
+   MSize len;		/* Size of payload. */
+   GCRef metatable;	/* Must be at same offset in GCtab. */
+-  uint32_t align1;	/* To force 8 byte alignment of the payload. */
++  MSize gcslot;		/* Index in the ordered userdata array. */
+ } GCudata;
+ 
+ /* Userdata types. */
 @@ -598,6 +598,11 @@
    GCRef grayagain;	/* List of objects for atomic traversal. */
    GCRef weak;		/* List of weak tables (to be cleared). */
@@ -7,25 +16,17 @@
 +  MRef udatalist;	/* Full userdata, oldest first. */
 +  MRef udwhite;		/* 32 slots per word, set until marked. */
 +  MSize udwhitecap;
-+  MSize udatacap, udatalen, udatapending;
++  MSize udatacap, udatalen;
 +  MSize udatasweepend, udatasweep, udataout;
    GCSize debt;		/* Debt (how much GC is behind schedule). */
    GCSize estimate;	/* Estimate of memory actually in use. */
    MSize stepmul;	/* Incremental GC step granularity. */
 --- a/src/lj_gc.h
 +++ b/src/lj_gc.h
-@@ -122,6 +122,19 @@
+@@ -122,6 +122,11 @@
    g->allocf(g->allocd, p, osize, 0);
  }
  
-+/* Indexed userdata have a tagged slot in nextgc. Pending finalizers
-+** use the same field as a conventional circular GC chain.
-+*/
-+static LJ_AINLINE void gc_udata_index(GCobj *o, MSize index)
-+{
-+  setgcrefp(o->gch.nextgc, (uintptr_t)(index * 2 + 1));
-+}
-+
 +static LJ_AINLINE void gc_udata_white(global_State *g, MSize index)
 +{
 +  mref(g->gc.udwhite, uint32_t)[index >> 5] |= (uint32_t)1 << (index & 31);
@@ -36,19 +37,16 @@
    ((p) = (t *)lj_mem_realloc(L, p, (on)*sizeof(t), (GCSize)((n)*sizeof(t))))
 --- a/src/lj_gc.c
 +++ b/src/lj_gc.c
-@@ -62,6 +62,11 @@
+@@ -62,6 +62,8 @@
    white2gray(o);
    if (LJ_UNLIKELY(gct == ~LJ_TUDATA)) {
      GCtab *mt = tabref(gco2ud(o)->metatable);
-+    uintptr_t slot = (uintptr_t)gcrefu(o->gch.nextgc);
-+    if (slot & 1) {
-+      MSize index = (MSize)(slot >> 1);
-+      mref(g->gc.udwhite, uint32_t)[index >> 5] &= ~((uint32_t)1 << (index & 31));
-+    }
++    MSize index = gco2ud(o)->gcslot;
++    mref(g->gc.udwhite, uint32_t)[index >> 5] &= ~((uint32_t)1 << (index & 31));
      gray2black(o);  /* Userdata are never gray. */
      if (mt) gc_markobj(g, mt);
      gc_markobj(g, tabref(gco2ud(o)->env));
-@@ -101,6 +106,9 @@
+@@ -101,6 +103,9 @@
    setgcrefnull(g->gc.gray);
    setgcrefnull(g->gc.grayagain);
    setgcrefnull(g->gc.weak);
@@ -58,19 +56,17 @@
    gc_markobj(g, mainthread(g));
    gc_markobj(g, tabref(mainthread(g)->env));
    gc_marktv(g, &g->registrytv);
-@@ -134,34 +142,75 @@
+@@ -134,34 +139,69 @@
    }
  }
  
 +/* Queue one full userdata, preserving the original newest-first order. */
-+static size_t gc_separateudata(global_State *g, GCRef *ref, GCobj *o)
++static size_t gc_separateudata(global_State *g, GCobj *o)
 +{
 +  if (isfinalized(gco2ud(o))) return 0;
 +  markfinalized(o);
 +  if (!lj_meta_fastg(g, tabref(gco2ud(o)->metatable), MM_gc))
 +    return 0;
-+  setgcrefnull(*ref);
-+  g->gc.udatapending++;
 +  if (gcref(g->gc.mmudata)) {
 +    GCobj *root = gcref(g->gc.mmudata);
 +    setgcrefr(o->gch.nextgc, root->gch.nextgc);
@@ -111,7 +107,7 @@
 +  uint32_t *white = mref(g->gc.udwhite, uint32_t);
 +  MSize len = g->gc.udatalen;
 +  if (LJ_UNLIKELY(all)) {
-+    MSize i, write = 0;
++    MSize i;
 +    if (g->gc.udatasweepend) {
 +      MSize read = g->gc.udatasweep;
 +      /* Drop the gap between the already compacted prefix and the suffix. */
@@ -122,19 +118,15 @@
 +    }
 +    for (i = len; i != 0;) {
 +      GCobj *o = gcref(list[--i]);
-+      if (o) size += gc_separateudata(g, &list[i], o);
++      size += gc_separateudata(g, o);
 +    }
 +    if (len) memset(white, 0, ((len + 31) >> 5) * sizeof(uint32_t));
 +    for (i = 0; i < len; i++) {
 +      GCobj *o = gcref(list[i]);
-+      if (o) {
-+	setgcref(list[write], o);
-+	gc_udata_index(o, write);
-+	if (iswhite(o)) gc_udata_white(g, write);
-+	++write;
-+      }
++      gco2ud(o)->gcslot = i;
++      if (iswhite(o)) gc_udata_white(g, i);
 +    }
-+    g->gc.udatalen = write;
++    g->gc.udatalen = len;
 +  } else if (len != 0) {
 +    MSize word = (len - 1) >> 5;
 +    uint32_t candidates = white[word] & ((uint32_t)~0 >> (31 - ((len - 1) & 31)));
@@ -145,7 +137,7 @@
 +	GCobj *o = gcref(list[index]);
 +	candidates &= ~((uint32_t)1 << bit);
 +	lj_assertG(o && iswhite(o), "invalid userdata candidate");
-+	size += gc_separateudata(g, &list[index], o);
++	size += gc_separateudata(g, o);
        }
 +      if (word == 0) break;
 +      candidates = white[--word];
@@ -156,7 +148,7 @@
  }
  
  /* -- Propagation phase --------------------------------------------------- */
-@@ -396,15 +445,16 @@
+@@ -396,15 +436,16 @@
  };
  
  /* Full sweep of a GC list. */
@@ -176,7 +168,7 @@
      if (o->gch.gct == ~LJ_TTHREAD)  /* Need to sweep open upvalues, too. */
        gc_fullsweep(g, &gco2th(o)->openupval);
      if (((o->gch.marked ^ LJ_GC_WHITES) & ow)) {  /* Black or current white? */
-@@ -421,9 +471,51 @@
+@@ -421,9 +462,57 @@
        gc_freefunc[o->gch.gct - ~LJ_TSTR](g, o);
      }
    }
@@ -196,29 +188,35 @@
 +  if (!end) end = g->gc.udatalen;
 +  while (read < end && limit != 0) {
 +    GCobj *o = gcref(list[read++]);
++    int pending = gcref(o->gch.nextgc) != NULL;
 +    --limit;
-+    if (!o) continue;
-+    if ((o->gch.marked ^ LJ_GC_WHITES) & ow) {
-+      makewhite(g, o);
++    if (pending || ((o->gch.marked ^ LJ_GC_WHITES) & ow)) {
++      if (!pending) makewhite(g, o);
 +      if (write != read - 1) {
 +	setgcref(list[write], o);
-+	gc_udata_index(o, write);
++	gco2ud(o)->gcslot = write;
 +      }
 +      ++write;
 +    } else {
 +      lj_udata_free(g, gco2ud(o));
 +    }
 +  }
-+  if (read == end) {
++  if (read >= end) {
 +    if (write != read) {
-+      while (read < g->gc.udatalen) {
++      /* Move only as many new slots as the rest of this step permits. */
++      while (read < g->gc.udatalen && limit != 0) {
 +	GCobj *o = gcref(list[read++]);
++	--limit;
 +	setgcref(list[write], o);
-+	gc_udata_index(o, write++);
++	gco2ud(o)->gcslot = write++;
 +      }
-+      g->gc.udatalen = write;
++      if (read == g->gc.udatalen) {
++	g->gc.udatalen = write;
++	read = write = end = 0;
++      }
++    } else {
++      read = write = end = 0;
 +    }
-+    read = write = end = 0;
 +  }
 +  g->gc.udatasweep = read;
 +  g->gc.udataout = write;
@@ -228,22 +226,21 @@
  /* Check whether we can clear a key or a value slot from a table. */
  static int gc_mayclear(cTValue *o, int val)
  {
-@@ -530,8 +622,12 @@
+@@ -529,9 +618,10 @@
+     return;
    }
  #endif
-   /* Add userdata back to the main userdata list and make it white. */
+-  /* Add userdata back to the main userdata list and make it white. */
 -  setgcrefr(o->gch.nextgc, mainthread(g)->nextgc);
 -  setgcref(mainthread(g)->nextgc, o);
-+  lj_assertG(g->gc.udatapending && g->gc.udatalen < g->gc.udatacap,
-+	     "missing reserved userdata slot");
-+  gc_udata_index(o, g->gc.udatalen);
-+  gc_udata_white(g, g->gc.udatalen);
-+  setgcref(mref(g->gc.udatalist, GCRef)[g->gc.udatalen++], o);
-+  g->gc.udatapending--;
++  /* The object stayed in its slot while it was queued. It is already
++  ** flagged finalized, so only the order of unfinalized slots matters.
++  */
++  setgcrefnull(o->gch.nextgc);
    makewhite(g, o);
    /* Resolve the __gc metamethod. */
    mo = lj_meta_fastg(g, tabref(gco2ud(o)->metatable), MM_gc);
-@@ -578,6 +674,20 @@
+@@ -578,6 +668,20 @@
    /* Free everything, except super-fixed objects (the main thread). */
    g->gc.currentwhite = LJ_GC_WHITES | LJ_GC_SFIXED;
    gc_fullsweep(g, &g->gc.root);
@@ -264,7 +261,7 @@
    strmask = g->strmask;
    for (i = 0; i <= strmask; i++)  /* Free all string hash chains. */
      gc_fullsweep(g, &g->strhash[i]);
-@@ -652,10 +762,14 @@
+@@ -652,10 +756,14 @@
      }
    case GCSsweep: {
      GCSize old = g->gc.total;
@@ -283,7 +280,7 @@
        if (gcref(g->gc.mmudata)) {  /* Need any finalizations? */
 --- a/src/lj_udata.c
 +++ b/src/lj_udata.c
-@@ -13,8 +13,31 @@
+@@ -13,8 +13,30 @@
  
  GCudata *lj_udata_new(lua_State *L, MSize sz, GCtab *env)
  {
@@ -291,9 +288,8 @@
    global_State *g = G(L);
 +  GCRef *list = mref(g->gc.udatalist, GCRef);
 +  GCudata *ud;
-+  MSize needed = g->gc.udatalen + g->gc.udatapending;
-+  /* Keep spare slots for queued finalizers, whose relink cannot allocate. */
-+  while (needed >= g->gc.udatacap) {
++  MSize needed = g->gc.udatalen;
++  if (needed >= g->gc.udatacap) {
 +    MSize limit = LJ_MAX_MEM32 / sizeof(GCRef);
 +    if (needed >= limit) lj_err_mem(L);
 +    MSize cap = g->gc.udatacap ? g->gc.udatacap * 2 : 32;
@@ -316,15 +312,16 @@
    newwhite(g, ud);  /* Not finalized. */
    ud->gct = ~LJ_TUDATA;
    ud->udtype = UDTYPE_USERDATA;
-@@ -22,9 +45,9 @@
+@@ -22,9 +44,10 @@
    /* NOBARRIER: The GCudata is new (marked white). */
    setgcrefnull(ud->metatable);
    setgcref(ud->env, obj2gco(env));
 -  /* Chain to userdata list (after main thread). */
 -  setgcrefr(ud->nextgc, mainthread(g)->nextgc);
 -  setgcref(mainthread(g)->nextgc, obj2gco(ud));
-+  gc_udata_index(obj2gco(ud), g->gc.udatalen);
-+  gc_udata_white(g, g->gc.udatalen);
++  setgcrefnull(ud->nextgc);
++  ud->gcslot = g->gc.udatalen;
++  gc_udata_white(g, ud->gcslot);
 +  setgcref(list[g->gc.udatalen++], obj2gco(ud));
    return ud;
  }

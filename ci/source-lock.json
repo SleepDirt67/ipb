@@ -1,7 +1,7 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
   ".github/workflows/lua-gc-windows.yml": "20ebb5b156c8cea5a182fdf3635425608bac19eabeab268fb20f929942c3ce7b",
-  ".github/workflows/windows-release.yml": "5404c8db3f2b65d9bddd361700f5e9f5cc9c772e124868a396da769938b62df0",
+  ".github/workflows/windows-release.yml": "84bb3df61ef378b4fce84b145300131240ef251f732688523d6f26ca6cc41153",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -40,6 +40,9 @@
   "ci/spawn-admission/SpawnPreparedGeometry.h": "fe4df2844ea4dd03a7f701ccfb511dc8daa32f4c0f574bfc87d6de5f884d2b42",
   "ci/spawn-admission/apply.py": "53df76bd44ae3a8f2989d159a00d478fd6a8324e004c30747e39dd9deb1dd4eb",
   "ci/spawn-admission/fixture.cpp": "099857bf72612828ecc44bc474a6c9a96458753880658bdb899ef05ec0b29b0c",
+  "ci/spawn-animation/CMakeLists.txt": "d7911656605af45c034e811066150494c76ba69bf995a57c4aed53f34c96347a",
+  "ci/spawn-animation/apply.py": "304619affe578f258deeaa93525ae323431f1fb755f4c3db4347e0f89b23f211",
+  "ci/spawn-animation/fixture.cpp": "94c2312887602726cd005395a461cb5f4044a10ffb93aed20ae2637f65669633",
   "ci/spawn-archives/CMakeLists.txt": "00cbd3bea9b134893f38d851cb06f8514cce315da0f45aca402068a8993e4d7f",
   "ci/spawn-archives/apply.py": "d45fa87adf45dbaac08ca06e3d8d27f7b9297bd3de14ea2429bf51bf13cefb28",
   "ci/spawn-archives/packed_view_check.cpp": "27a163a06c0ccfd21a212b907e1a304975ffc71807868379b8b256aa53283991",

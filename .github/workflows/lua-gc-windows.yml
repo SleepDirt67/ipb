@@ -1,0 +1,110 @@
+name: Windows LuaJIT gameplay stall replay
+on:
+  push:
+    branches: ['lab/lua-gc-136']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: lua-gc-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: LuaJIT/LuaJIT
+          ref: dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268
+          path: luajit
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: imesense/packages-collection
+          ref: 02c62d81bc3ab8a46c37efa3c13af3217afa9e08
+          path: recipe
+          persist-credentials: false
+      - name: Build the pinned IX-Ray LuaJIT with indexed userdata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($patch in (Get-ChildItem recipe/pkg/LuaJIT/LuaJIT/1626960173/patch/*.patch | Sort-Object Name)) {
+            git -C luajit apply $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw "IX-Ray LuaJIT recipe rejected $($patch.Name)" }
+          }
+          $indexPatch = (Resolve-Path ci/lua-gc/userdata-index.patch).Path
+          git -C luajit apply $indexPatch
+          if ($LASTEXITCODE -ne 0) { throw 'Indexed userdata patch rejected' }
+          cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+          if ($LASTEXITCODE -ne 0) { throw 'LuaJIT configure failed' }
+          cmake --build gc-build --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'LuaJIT compile failed' }
+          $headers = (Resolve-Path luajit/src).Path
+          $import = (Resolve-Path gc-build/lib/Release/lua51.lib).Path
+          cmake -S ci/lua-gc -B gc-replay -A x64 "-DLUA_HEADERS=$headers" "-DLUA_IMPORT=$import"
+          if ($LASTEXITCODE -ne 0) { throw 'Replay configure failed' }
+          cmake --build gc-replay --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Replay compile failed' }
+      - name: Extract the exact played LuaJIT runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'played-package.zip'
+          Invoke-WebRequest -Uri 'https://api.github.com/repos/SleepDirt67/ipb/actions/artifacts/13684380200/zip' -Headers @{Authorization = "Bearer $env:GH_TOKEN"} -OutFile $archive -TimeoutSec 120
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+          try {
+            $entry = $zip.GetEntry('bin/lua51.dll')
+            if (-not $entry) { throw 'Played artifact has no bin/lua51.dll' }
+            $stock = Join-Path $env:GITHUB_WORKSPACE 'gc-stock.dll'
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $stock)
+          } finally {
+            $zip.Dispose()
+          }
+          $expected = '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c'
+          if ((Get-FileHash -LiteralPath $stock -Algorithm SHA256).Hash -ne $expected) { throw 'Played runtime SHA256 differs' }
+      - name: Compare finalizer behavior and timed spawn allocation bursts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path gc-results,gc-stock,gc-candidate | Out-Null
+          Copy-Item gc-replay/Release/*.exe -Destination gc-stock
+          Copy-Item gc-replay/Release/*.exe -Destination gc-candidate
+          Copy-Item gc-build/bin/Release/luajit.exe -Destination gc-stock
+          Copy-Item gc-build/bin/Release/luajit.exe -Destination gc-candidate
+          Copy-Item gc-stock.dll -Destination gc-stock/lua51.dll
+          Copy-Item gc-build/bin/Release/lua51.dll -Destination gc-candidate
+          foreach ($variant in @('stock','candidate')) {
+            & "gc-$variant/luajit.exe" ci/lua-gc/userdata_replay.lua > "gc-results/$variant-finalizers.txt"
+            if ($LASTEXITCODE -ne 0) { throw "$variant Lua semantics fixture failed" }
+            & "gc-$variant/close_gc_check.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$variant shutdown fixture failed" }
+          }
+          if ((Get-FileHash gc-results/stock-finalizers.txt).Hash -ne (Get-FileHash gc-results/candidate-finalizers.txt).Hash) {
+            throw 'Finalizer order or weak table state differed'
+          }
+          for ($i = 0; $i -lt 5; ++$i) {
+            foreach ($shape in @(@(10000,600), @(60000,600), @(240000,600), @(60000,6000))) {
+              $variants = if ($i % 2) { @('candidate','stock') } else { @('stock','candidate') }
+              foreach ($variant in $variants) {
+                $sample = & "gc-$variant/binder_gc_bench.exe" $shape[0] $shape[1] 105
+                if ($LASTEXITCODE -ne 0) { throw "$variant allocation replay failed" }
+                "$i $variant $sample" | Tee-Object -FilePath gc-results/replay.txt -Append
+              }
+            }
+          }
+          Get-FileHash gc-stock/lua51.dll,gc-candidate/lua51.dll | Out-String | Tee-Object -FilePath gc-results/runtimes.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: IXRay-LuaJIT-GC-Windows-Replay
+          path: gc-results/
+          retention-days: 14

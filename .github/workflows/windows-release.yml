@@ -1,7 +1,7 @@
-name: Windows connected spawn path with original and indexed LuaJIT
+name: Windows connected spawn path with indexed native registration
 on:
   push:
-    branches: ['lab/spawn-connected-lua-gc-136']
+    branches: ['lab/serial-spawn-136']
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   compile:
-    name: Connected spawn cohort replay under fragmented Lua heaps
+    name: Compare stock and indexed native collection registration
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
@@ -384,7 +384,10 @@ jobs:
       - name: Generate stock theme and model the complete mixed resource cohort
         shell: pwsh
         run: |
-          python ci/spawn-cohort-replay/apply.py ixray
+          Copy-Item ixray/src/xrGame/sound_player.cpp checks/stock_sound_player.cpp
+          python ci/spawn-bind/apply.py ixray checks/spawn-bind-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Native registration overlay failed' }
+          python ci/spawn-cohort-replay/apply.py ixray checks/stock_sound_player.cpp checks/spawn-bind-generated
           if ($LASTEXITCODE -ne 0) { throw 'Cohort native extraction failed' }
           python ci/spawn-cohort-replay/cohort_fixture.py ixray checks/cohort
           if ($LASTEXITCODE -ne 0) { throw 'Stock cohort generation failed' }
@@ -422,7 +425,7 @@ jobs:
           Copy-Item -LiteralPath $runtime checks/original-lua51.dll
           ./ci/lua-gc/build_engine_runtime.ps1
 
-      - name: Compare only the LuaJIT runtime in the same connected spawn replay
+      - name: Compare only the native collection implementation in the same replay
         shell: pwsh
         timeout-minutes: 12
         run: |
@@ -431,15 +434,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Cohort compile failed' }
           $bin = 'ixray/build/x64/Engine-Windows/bin/Release'
           $fixture = "$bin/ixray_spawn_mainline_replay.exe"
-          $sources = @{original = 'checks/original-lua51.dll'; indexed = 'gc-build/bin/Release/lua51.dll'}
+          Copy-Item gc-build/bin/Release/lua51.dll "$bin/lua51.dll" -Force
           Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
           $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
           $reference = $null
-          foreach ($heap in @(0,60000,240000)) {
+          foreach ($heap in @(0,240000)) {
             $env:IXRAY_REPLAY_LIVE_USERDATA = "$heap"
-            $variants = if ($heap -eq 60000) { @('indexed','original') } else { @('original','indexed') }
+            $variants = @('original','indexed','indexed','original')
             foreach ($variant in $variants) {
-              Copy-Item -LiteralPath $sources[$variant] -Destination "$bin/lua51.dll" -Force
+              $env:IXRAY_REPLAY_INDEXED = if ($variant -eq "indexed") { "1" } else { "0" }
               $sample = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
               if ($LASTEXITCODE -ne 0) { throw "$variant connected replay failed" }
               $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {

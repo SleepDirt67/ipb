@@ -10,12 +10,13 @@ def replace(data, before, after):
     return data.replace(before, after, 1)
 
 
-def patch(root):
+def patch(root, stock_player, generated):
     folder = Path(__file__).resolve().parent
     target = root / "ixray_spawn_mainline_replay.cpp"
     source = target.read_text(encoding="utf-8")
     source = replace(source, "#include <vector>", '''#include <vector>
-#include <map>
+#include <memory>
+#include <unordered_map>
 #include <unordered_set>
 
 static bool cohortMode = false;
@@ -43,17 +44,25 @@ int main(int argc, char** argv)
     }''')
     target.write_text(source, encoding="utf-8")
     shutil.copyfile(folder / "CohortResourceReplay.inc", root / "CohortResourceReplay.inc")
-    original = (root / "src/xrGame/sound_player.cpp").read_text(encoding="utf-8")
-    start = original.index("CSoundPlayer::CSoundCollection::CSoundCollection")
-    end = original.index("CSoundPlayer::CSoundCollection::~CSoundCollection", start)
-    data = original[start:end]
-    data = data.replace("CSoundPlayer::CSoundCollection::CSoundCollection", "ReplayCollection::ReplayCollection")
-    data = data.replace("const CSoundCollectionParams &params", "const CohortSoundParams &params")
-    data = data.replace("    PacingDiag::SpawnSpan spawnPath(PacingDiag::Kind::BinderSoundCollection);\n", "")
-    (root / "CohortCollectionUnderTest.inc").write_text(data, encoding="utf-8")
+    for fixture in ("CollectionParams.inc", "BaselineStorage.inc", "IndexedStorage.inc"):
+        text = (generated / fixture).read_text(encoding="utf-8")
+        (root / fixture).write_text(text.replace("delete_data", "DeleteReplayCollections"), encoding="utf-8")
+    indexed_player = root / "src/xrGame/sound_player.cpp"
+    for player, method in ((stock_player, "BuildOriginal"), (indexed_player, "BuildIndexed")):
+        original = player.read_text(encoding="utf-8")
+        start = original.index("CSoundPlayer::CSoundCollection::CSoundCollection")
+        end = original.index("CSoundPlayer::CSoundCollection::~CSoundCollection", start)
+        data = original[start:end]
+        data = data.replace("CSoundPlayer::CSoundCollection::CSoundCollection", f"void ReplayCollection::{method}")
+        data = data.replace("const CSoundCollectionParams &params", "const CohortSoundParams &params")
+        data = data.replace("    PacingDiag::SpawnSpan spawnPath(PacingDiag::Kind::BinderSoundCollection);\n", "")
+        (root / (method + ".inc")).write_text(data, encoding="utf-8")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("engine", type=Path)
-    patch(parser.parse_args().engine)
+    parser.add_argument("stock_player", type=Path)
+    parser.add_argument("generated", type=Path)
+    args = parser.parse_args()
+    patch(args.engine, args.stock_player, args.generated)

@@ -1,23 +1,31 @@
 namespace
 {
-struct CohortSoundParams
+struct ReplayCollection;
+struct CSoundPlayer
 {
-    shared_str m_sound_prefix, m_sound_player_prefix;
-    u32 m_max_count;
-    ESoundTypes m_type;
+#include "CollectionParams.inc"
+    using CSoundCollection = ReplayCollection;
 };
+using CohortSoundParams = CSoundPlayer::CSoundCollectionParams;
 using ref_sound = bool;
 
 std::unordered_set<std::string> cohortSources;
-std::map<std::pair<std::string, std::string>, unsigned> cohortCollections;
 unsigned cohortOpens;
+bool indexedCollections;
 
-class ReplayCollection
+struct ReplayCollection
 {
-public:
     u32 m_last_sound_id;
     xr_vector<ref_sound*> m_sounds;
-    explicit ReplayCollection(const CohortSoundParams& params);
+    explicit ReplayCollection(const CohortSoundParams& params)
+    {
+        if (indexedCollections)
+            BuildIndexed(params);
+        else
+            BuildOriginal(params);
+    }
+    void BuildOriginal(const CohortSoundParams& params);
+    void BuildIndexed(const CohortSoundParams& params);
     void seed(u32) {}
     ref_sound* add(ESoundTypes, const char* name)
     {
@@ -32,21 +40,29 @@ public:
         return &value;
     }
 };
+#include "BuildOriginal.inc"
+#include "BuildIndexed.inc"
+template<class Vector> void DeleteReplayCollections(Vector& pairs)
+{
+    for (auto& pair : pairs) delete pair.second;
+}
+#include "BaselineStorage.inc"
+#include "IndexedStorage.inc"
+std::unique_ptr<BaselineStorage> baselineStorage;
+std::unique_ptr<IndexedStorage> indexedStorage;
 
-#include "CohortCollectionUnderTest.inc"
+const ReplayCollection& ResolveCollection(const CohortSoundParams& params)
+{
+    if (indexedCollections)
+        return *indexedStorage->object(params).second;
+    return *baselineStorage->object(params).second;
+}
 }
 
 unsigned ResolveCohortSound(const char* prefix, const char* name, unsigned maximum)
 {
-    auto key = std::make_pair(std::string(prefix), std::string(name));
-    const auto found = cohortCollections.find(key);
-    if (found != cohortCollections.end())
-        return found->second;
     const CohortSoundParams parameters{name, prefix, maximum, SOUND_TYPE_TALKING};
-    const ReplayCollection collection(parameters);
-    const auto count = static_cast<unsigned>(collection.m_sounds.size());
-    cohortCollections.emplace(std::move(key), count);
-    return count;
+    return static_cast<unsigned>(ResolveCollection(parameters).m_sounds.size());
 }
 
 static int ReadCohortItem(lua_State* L)
@@ -149,6 +165,8 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
     const char* pressure = std::getenv("IXRAY_REPLAY_LIVE_USERDATA");
     const auto userdata = pressure ? static_cast<unsigned>(std::strtoul(pressure, nullptr, 10)) : 0;
     Require(userdata <= 480000, "bounded fixture heap");
+    const auto* indexed = std::getenv("IXRAY_REPLAY_INDEXED");
+    indexedCollections = indexed && indexed[0] == '1';
     std::vector<double> cold, warm;
     unsigned checksum = 0, measuredOpens = 0;
     for (unsigned trial = 0; trial < 15; ++trial)
@@ -167,7 +185,16 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         SeedCohortGc(L, userdata, trial);
 
         cohortSources.clear();
-        cohortCollections.clear();
+        if (indexedCollections)
+            indexedStorage = std::make_unique<IndexedStorage>();
+        else
+            baselineStorage = std::make_unique<BaselineStorage>();
+        // Model a played session with thousands of distinct existing keys.
+        for (unsigned i = 0; i < 6828; ++i)
+        {
+            const auto id = "fixture_previous_" + std::to_string(i);
+            ResolveCollection({id.c_str(), "characters_voice\\cohort_0\\", 64, SOUND_TYPE_TALKING});
+        }
         cohortOpens = 0;
         cohortApplied = 0;
         const auto start = std::chrono::steady_clock::now();
@@ -189,6 +216,8 @@ static int RunCohort(const char* voice, const char* themes, const char* files, c
         Require(registrations == 569 * 9, "warm registration count");
         registrations = 0;
         lua_close(L);
+        baselineStorage.reset();
+        indexedStorage.reset();
     }
     for (unsigned trial = 0; trial < cold.size(); ++trial)
         std::printf("REPLAY: live %u, trial %u, cold %.3f ms, warm %.3f ms\n",

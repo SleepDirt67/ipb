@@ -410,12 +410,18 @@ jobs:
           Copy-Item (Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll') "$bin/lua51.dll" -Force
           $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
           $env:IXRAY_SPAWN_PREPARE = '0'
-          $control = & $fixture --cohort checks/spawn-mainline/stock.lua @argsCommon
+          $stock = & $fixture --cohort checks/spawn-mainline/stock.lua @argsCommon
+          if ($LASTEXITCODE -ne 0) { throw 'Unmodified stock cohort failed' }
+          Write-Host 'UNMODIFIED STOCK'
+          $stock | Select-String '^COHORT:'
+          $control = & $fixture --cohort checks/spawn-mainline/previous.lua @argsCommon
+          Write-Host 'PLAYED FALLBACK, PREPARATION DISABLED'
           if ($LASTEXITCODE -ne 0) { throw 'Stock cohort failed' }
           $control | Select-String '^COHORT:'
           Remove-Item Env:IXRAY_SPAWN_PREPARE
           $candidate = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
           if ($LASTEXITCODE -ne 0) { throw 'Prepared cohort failed' }
+          Write-Host 'PREPARED, ORDINARY LAUNCH'
           $candidate | Select-String '^COHORT:'
           $state = '(\d+) real opens, state (\d+)'
           $a = [regex]::Match(($control -join "`n"), $state)

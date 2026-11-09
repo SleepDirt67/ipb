@@ -369,7 +369,9 @@ jobs:
           cmake --build checks/packed-view --config Release --parallel 4
           if ($LASTEXITCODE -ne 0) { throw 'Packed fixture compile failed' }
           & checks/packed-view/Release/ixray_packed_view_check.exe | Tee-Object checks/PACKED_VIEW_WINDOWS.txt
-          if ($LASTEXITCODE -ne 0) { throw 'Packed view different      - name: Register the real xrCore packed-archive fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Packed view differential failed' }
+
+      - name: Register the real xrCore packed-archive fixture
         shell: pwsh
         run: |
           Copy-Item ci/spawn-archives/engine_archive_check.cpp ixray/
@@ -378,8 +380,6 @@ jobs:
           target_include_directories(ixray_engine_archive_check PRIVATE src/xrCore "${IXRAY_SDK_INC}")
           target_link_libraries(ixray_engine_archive_check PRIVATE xrCore)
           '@ | Add-Content ixray/CMakeLists.txt -Encoding utf8
-
-ial failed' }
 
       - name: Configure engine
         shell: pwsh

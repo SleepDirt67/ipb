@@ -359,6 +359,9 @@ jobs:
           python ci/spawn-bridge/collection_index.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Collection index overlay failed' }
 
+      - name: Prioritize exact sound inputs for the active level cohort
+        run: python ci/spawn-cohort/apply.py ixray
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray

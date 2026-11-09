@@ -40,8 +40,11 @@ for path in sorted(out.iterdir()):
         shutil.copy2(pdb, symbol_root / pdb.name)
         pdbs.append({'module': path.name, 'pdb': pdb.name, 'module_sha256': entry['sha256'],
                      'pdb_sha256': digest(pdb), 'guid': guid.hex(), 'age': age})
-assert len(modules) == 36 and len(pdbs) == 11, (len(modules), len(pdbs))
-assert digest(bin_path / 'lua51.dll') == '09fd13282c381f5b9afae3debb986474656d466006c80591e9da251f0ddcc47c'
+assert len(modules) == 36 and len(pdbs) == 12, (len(modules), len(pdbs))
+lua_runtime = json.loads(Path('checks/LUAJIT_RUNTIME.json').read_text(encoding='utf-8'))
+assert digest(bin_path / 'lua51.dll') == lua_runtime['candidate_dll_sha256']
+assert digest(symbol_root / 'lua51.pdb') == lua_runtime['candidate_pdb_sha256']
+assert digest(Path('ci/lua-gc/userdata-index.patch')) == lua_runtime['patch_sha256']
 shutil.copy2('LICENSE.md', package / 'LICENSE.md')
 for name in ('INSTALL.cmd', 'RESTORE.cmd', 'RUN_PERFORMANCE.cmd', 'install.ps1', 'restore.ps1',
              'installation_common.ps1', 'run.ps1'):
@@ -49,7 +52,7 @@ for name in ('INSTALL.cmd', 'RESTORE.cmd', 'RUN_PERFORMANCE.cmd', 'install.ps1',
 for path in Path('checks').iterdir():
     if path.is_file() and path.suffix in ('.txt', '.json'):
         shutil.copy2(path, checks / path.name)
-for name in ('ci/source-lock.json',):
+for name in ('ci/source-lock.json', 'ci/lua-gc/userdata-index.patch'):
     shutil.copy2(name, source / Path(name).name)
 # Archive the exact engine delta plus newly generated files before packaging.
 (source / 'engine.patch').write_bytes(subprocess.check_output(
@@ -72,7 +75,7 @@ manifest = {
     'run_id': os.environ['GITHUB_RUN_ID'], 'upstream_commit': upstream,
     'source_lock_sha256': digest(root / 'ci/source-lock.json'),
     'engine_inputs_sha256': digest(Path('checks/PUBLIC_ENGINE_INPUTS.json')),
-    'dependency_commits': dependency_pins,
+    'dependency_commits': dependency_pins, 'lua_runtime': lua_runtime,
     'configuration': 'Release', 'architecture': 'x64',
     'ingame_tested': False, 'modules': modules, 'pe_validation': verify(bin_path),
 }
@@ -83,4 +86,4 @@ shutil.copy2(symbol_root / 'SYMBOLS_MANIFEST.json', checks / 'SYMBOLS_MANIFEST.j
 files = sorted(p for p in package.rglob('*') if p.is_file())
 (package / 'SHA256SUMS.txt').write_text(''.join(f'{digest(p)}  {p.relative_to(package).as_posix()}\n' for p in files),
                                        encoding='ascii', newline='\n')
-print(f'Windows x64 Release, 36 modules, 11 exact PDB matches and {len(files)} SHA-256 entries')
+print(f'Windows x64 Release, 36 modules, 12 exact PDB matches and {len(files)} SHA-256 entries')

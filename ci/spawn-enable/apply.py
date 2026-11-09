@@ -108,6 +108,8 @@ private:
 ''', "")
 
     fixture = root / "ixray_spawn_mainline_replay.cpp"
+    edit(fixture, '#include "src/xrGame/SpawnVoiceApply.inc"',
+         '#include "src/xrCore/SpawnPreparationConfig.h"\n#include "src/xrGame/SpawnVoiceApply.inc"')
     edit(fixture, '''        const auto plan = admittedPlan;
         const auto source = [](const void* context) -> std::shared_ptr<const void>
         {

@@ -358,6 +358,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Level sound preparation overlay failed' }
           python ci/spawn-enable/apply.py ixray
           if ($LASTEXITCODE -ne 0) { throw 'Stock launch activation overlay failed' }
+          python ci/spawn-archives/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Packed archive overlay failed' }
+
+      - name: Verify the Win32 mapped-view lifetime and measure packed slices
+        shell: pwsh
+        run: |
+          cmake -S ci/spawn-archives -B checks/packed-view -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Packed fixture configure failed' }
+          cmake --build checks/packed-view --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Packed fixture compile failed' }
+          & checks/packed-view/Release/ixray_packed_view_check.exe | Tee-Object checks/PACKED_VIEW_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Packed view differential failed' }
 
       - name: Configure engine
         shell: pwsh

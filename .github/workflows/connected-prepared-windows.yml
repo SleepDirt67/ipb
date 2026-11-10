@@ -1,0 +1,427 @@
+name: Connected Windows replay of prepared NPC spawn
+on:
+  push:
+    branches: ['lab/spawn-prepared-connected-136']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Windows x64 / paired stock NPC binder and packed reads
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - name: Checkout experiment
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Checkout original IX-Ray r1.3.6
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ixray-team/ixray-1.6-stcop
+          ref: 612b165c97d5e6a50ac0a6d1384ac8c95a63dda5
+          path: ixray
+          persist-credentials: false
+
+      - name: Verify the exact public source export
+        run: python ci/source_lock.py
+
+      - name: Apply canonical physical HOLD controls
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_Unified_Hold_Controls.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Physical HOLD patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Physical HOLD patch apply failed' }
+
+      - name: Apply canonical mouse-wheel zoom direction
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_ScrollZoom_Fix.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Mouse-wheel patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Mouse-wheel patch apply failed' }
+
+      - name: Restore physical Ctrl+Shift crouch-sprint and its animations
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_Hold_CrouchSprint_Source.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Crouch-sprint patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Crouch-sprint patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply only the no-flush occlusion-query patch
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_Occlusion_NoFlush.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply dynamic-buffer capacity experiment
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_DynamicBuffers_2x.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic buffer patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Dynamic buffer patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply DXGI frame queue cap experiment
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_DX11_FrameLatency2.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'DXGI frame latency patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'DXGI frame latency patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply CPU allocation and synchronization improvements
+        shell: pwsh
+        run: |
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Batch_Perf.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU batch patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU batch patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply CPU streaming and graph optimization batch
+        shell: pwsh
+        run: |
+          # Original r1.3.6 has a mix of CRLF and LF files.
+          # Normalize only the three sources touched by this patch; source semantics are unchanged.
+          @'
+          from pathlib import Path
+          for name in ('src/xrEngine/AI/game_graph.cpp', 'src/Layers/xrRender/DetailManager_CACHE.cpp', 'src/Layers/xrRender/DetailManager.cpp'):
+              p = Path('ixray') / name
+              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
+          patch_file = Path('IXRay_136_CPU_Streaming_Batch2.patch')
+          patch_file.write_bytes(patch_file.read_bytes().replace(b'\r\n', b'\n'))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Source newline normalization failed' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Streaming_Batch2.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU streaming patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'CPU streaming patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Apply triangle precompute and game graph optimization batch
+        shell: pwsh
+        run: |
+          # Normalize the source and the patch; Actions on Windows checks out mixed EOLs.
+          @'
+          from pathlib import Path
+          for name in ('src/Layers/xrRender/DetailManager_Decompress.cpp', 'src/xrEngine/AI/game_graph.cpp'):
+              p = Path('ixray') / name
+              p.write_bytes(p.read_bytes().replace(b'\r\n', b'\n'))
+          patch_file = Path('IXRay_136_CPU_Grass_Graph_Batch3.patch')
+          patch_file.write_bytes(patch_file.read_bytes().replace(b'\r\n', b'\n'))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Source normalization for grass/graph batch failed' }
+          $patch = Join-Path $env:GITHUB_WORKSPACE 'IXRay_136_CPU_Grass_Graph_Batch3.patch'
+          git -C ixray apply --check $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Grass/graph patch check failed' }
+          git -C ixray apply $patch
+          if ($LASTEXITCODE -ne 0) { throw 'Grass/graph patch apply failed' }
+          git -C ixray diff --stat
+
+      - name: Add opt-in frame-correlated diagnostics (replaces old trace)
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_frame_diagnostics.py
+          if ($LASTEXITCODE -ne 0) { throw 'Frame attribution overlay failed' }
+          # The base IX-Ray tree and existing gameplay patches contain historical
+          # trailing whitespace. Whole-tree git diff --check rejects those unrelated
+          # lines after mixed-EOL source normalization; checked anchors above are strict.
+          git -C ixray diff --stat
+
+      - name: Add focused spawn and Scheduler hotpath timing
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_spawn_scheduler_detail.py
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn and scheduler hotpath overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Apply conservative engine hotpath fixes
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_engine_hotpath_fixes.py
+          if ($LASTEXITCODE -ne 0) { throw 'Conservative hotpath fix overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Restore original FS retry and protect scripted main menu factory
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_mainmenu_crashfix.py
+          if ($LASTEXITCODE -ne 0) { throw 'Script factory crashfix overlay failed' }
+          git -C ixray diff --stat
+
+      - name: Remove class layout ABI break introduced by CLASS_ID caching
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_restore_objectpool_abi.py
+          if ($LASTEXITCODE -ne 0) { throw 'ABI restore patch failed' }
+          git -C ixray diff --stat
+
+      - name: Apply verified semantic hotpaths and correlated trace
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_stall_work.py
+          if ($LASTEXITCODE -ne 0) { throw 'Semantic overlay or ABI/control checks failed' }
+          New-Item -ItemType Directory -Force checks | Out-Null
+          python experiments/stall-work-136/tests/generate_tests.py ixray checks/generated
+          if ($LASTEXITCODE -ne 0) { throw 'Differential test generation failed' }
+
+      - name: Apply post-PR16 audit candidate with protected source guards
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_audit_work.py
+          if ($LASTEXITCODE -ne 0) { throw 'Audit overlay failed' }
+          python experiments/audit-136/tests/generate_tests.py ixray checks/audit-generated checks/pr16-source
+          if ($LASTEXITCODE -ne 0) { throw 'Audit test generation failed' }
+
+      - name: Apply independent pacing overlay and protected source checks
+        shell: pwsh
+        run: |
+          python tools/apply_ixray_pacing.py
+          if ($LASTEXITCODE -ne 0) { throw 'Pacing overlay failed' }
+
+      - name: Add sparse gameplay attribution and optional DX11 pixel observations
+        shell: pwsh
+        run: |
+          python experiments/auto-pacing-136/followup/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay attribution overlay failed' }
+
+      - name: Apply and compare stack-backed sound and level-search fixes
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/hotpaths/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath overlay failed' }
+          cmake -S experiments/periodic-136/hotpaths -B checks/stack-hotpaths -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath fixture configure failed' }
+          cmake --build checks/stack-hotpaths --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath fixture build failed' }
+          & checks/stack-hotpaths/Release/ixray_stack_hotpaths.exe | Tee-Object checks/STACK_HOTPATHS_DIFFERENTIAL.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Hotpath differential fixture failed' }
+
+      - name: Prewarm traced DX11 variants and verify cold and warm bytecode
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/shader-warmup/apply.py
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm overlay failed' }
+          python ci/spawn-preparation/shaders.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'PDA shader preparation failed' }
+          cmake -S experiments/periodic-136/shader-warmup -B checks/shader-warmup -A x64 "-DENGINE=$env:GITHUB_WORKSPACE/ixray"
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture configure failed' }
+          cmake --build checks/shader-warmup --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Shader prewarm fixture build failed' }
+          & checks/shader-warmup/Release/ixray_shader_warmup.exe "$env:GITHUB_WORKSPACE/ixray/gamedata/shaders" "$env:RUNNER_TEMP/ixray-shader-prewarm" | Tee-Object checks/PACING_SHADER_WARMUP_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw "Shader prewarm fixture failed (exit $LASTEXITCODE)" }
+
+      - name: Checkout the exact Luabind dependency used by Shader Warmup
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: ForserX/luabind-latest
+          ref: 128ba59572e508f0c550f4ff8a5235c07c77de3d
+          path: ixray/build/x64/Engine-Windows/_deps/luabind-src
+          persist-credentials: false
+
+      - name: Apply Luabind and numbered sound fixes and extract both versions
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/gameplay-stalls/generate.py ixray ixray/build/x64/Engine-Windows/_deps/luabind-src checks/gameplay-stalls-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Gameplay stalls overlay failed' }
+
+      - name: Apply loading-time sound preparation and guarded script configuration reuse
+        shell: pwsh
+        run: |
+          python experiments/periodic-136/spawn-resources/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Resource preparation overlay failed' }
+
+      - name: Instrument the PR20 spawn path
+        run: python ci/spawn-path/apply.py ixray
+
+      - name: Prepare the traced audio and Lua paths
+        shell: pwsh
+        run: |
+          python ci/spawn/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Stock conditions overlay failed' }
+          python ci/spawn-preparation/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn preparation overlay failed' }
+          python ci/spawn-coverage/audio.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Sound coverage overlay failed' }
+          python ci/spawn-coverage/lua.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Lua function guard overlay failed' }
+
+      - name: Stage model loading and reuse immutable activation contacts
+        run: python ci/spawn-activation/apply.py ixray
+
+      - name: Add detached ALife spawn preparation
+        run: python ci/spawn-admission/apply.py ixray
+
+      - name: Prepare detached stock voice inputs for spawn admission
+        run: python ci/spawn-mainline/apply.py ixray checks/spawn-mainline
+
+      - name: Prepare model references, jobs and exact level sound inputs
+        shell: pwsh
+        run: |
+          python ci/spawn-critical/prepare_model_bases.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Model preparation overlay failed' }
+          python ci/spawn-critical/prepare_render_history.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Render history overlay failed' }
+          python ci/spawn-critical/prepare_smart_jobs.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Job preparation overlay failed' }
+          python ci/spawn-cohort/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Level sound preparation overlay failed' }
+          python ci/spawn-enable/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Stock launch activation overlay failed' }
+          python ci/spawn-archives/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Packed archive overlay failed' }
+
+      - name: Apply and test the exact level search and serial registration bodies
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          python ci/level-path/apply.py ixray checks/level-path-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Level search overlay failed' }
+          python ci/spawn-bind/apply.py ixray checks/spawn-bind-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Serial spawn overlay failed' }
+          cmake -S ci/level-path -B checks/serial-frame -A x64 "-DLEVEL_PATH_GENERATED=$env:GITHUB_WORKSPACE/checks/level-path-generated" "-DSPAWN_BIND_GENERATED=$env:GITHUB_WORKSPACE/checks/spawn-bind-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Serial frame fixture configure failed' }
+          cmake --build checks/serial-frame --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Serial frame fixture compile failed' }
+          & checks/serial-frame/Release/level_search_replay.exe | Tee-Object checks/LEVEL_SEARCH_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Level search path differential failed' }
+          & checks/serial-frame/Release/collection_index_replay.exe | Tee-Object checks/SPAWN_COLLECTION_INDEX_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn collection differential failed' }
+
+      - name: Compare actual animation startup, notification order and slot precedence
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          python ci/spawn-animation/apply.py ixray checks/spawn-animation-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Animation spawn overlay failed' }
+          cmake -S ci/spawn-animation -B checks/spawn-animation -A x64 "-DANIMATION_GENERATED=$env:GITHUB_WORKSPACE/checks/spawn-animation-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Animation replay configure failed' }
+          cmake --build checks/spawn-animation --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Animation replay compile failed' }
+          & checks/spawn-animation/Release/animation_spawn_replay.exe | Tee-Object checks/SPAWN_ANIMATION_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Animation state or motion lookup diverged' }
+
+      - name: Stage and verify detached visual instances and prepared binder inputs
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          python ci/spawn-detached/apply.py ixray checks/spawn-detached-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual overlay failed' }
+          python ci/spawn-transaction/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn transaction overlay failed' }
+          cmake -S ci/spawn-detached -B checks/spawn-detached -A x64 "-DDETACHED_GENERATED=$env:GITHUB_WORKSPACE/checks/spawn-detached-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay configure failed' }
+          cmake --build checks/spawn-detached --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay compile failed' }
+          & checks/spawn-detached/Release/detached_visual_replay.exe | Tee-Object checks/SPAWN_DETACHED_VISUALS_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay failed' }
+
+      - name: Generate paired connected replay inputs
+        shell: pwsh
+        run: |
+          python ci/spawn-cohort-replay/apply.py ixray checks/spawn-bind-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Cohort native extraction failed' }
+          python ci/spawn-cohort-replay/cohort_fixture.py ixray checks/cohort
+          if ($LASTEXITCODE -ne 0) { throw 'Stock cohort generation failed' }
+          Add-Content ixray/CMakeLists.txt -Value 'target_link_libraries(ixray_spawn_mainline_replay PRIVATE bcrypt)'
+
+      - name: Configure engine
+        shell: pwsh
+        working-directory: ixray
+        run: |
+          cmake --preset Engine-x64-Windows "-DFETCHCONTENT_SOURCE_DIR_LUABIND=$env:GITHUB_WORKSPACE/ixray/build/x64/Engine-Windows/_deps/luabind-src"
+          if ($LASTEXITCODE -ne 0) { throw 'CMake configure failed' }
+
+      - name: Checkout the LuaJIT revision used by the IX-Ray package
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: LuaJIT/LuaJIT
+          ref: dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268
+          path: luajit
+          persist-credentials: false
+
+      - name: Checkout the pinned IX-Ray LuaJIT packaging recipe
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: imesense/packages-collection
+          ref: 02c62d81bc3ab8a46c37efa3c13af3217afa9e08
+          path: recipe
+          persist-credentials: false
+
+      - name: Build and stage the ABI-checked LuaJIT runtime
+        shell: pwsh
+        timeout-minutes: 8
+        run: ./ci/lua-gc/build_engine_runtime.ps1
+
+      # Fail a broken replay before the full engine is compiled.
+      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne $env:LUAJIT_RUNTIME_SHA256) { throw 'Lua runtime mismatch' }
+          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
+          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
+          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
+
+      - name: Compare stock binder and OGG witnesses in one process
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          cmake --build ixray/build/x64/Engine-Windows --config Release --target ixray_spawn_mainline_replay --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Cohort compile failed' }
+          $bin = 'ixray/build/x64/Engine-Windows/bin/Release'
+          $fixture = "$bin/ixray_spawn_mainline_replay.exe"
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          Copy-Item -LiteralPath $dll "$bin/lua51.dll" -Force
+          Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
+          $argsCommon = @('checks/cohort/themes.lua','checks/cohort/files.txt','ci/spawn-cohort-replay/cohort_run.lua')
+          $reference = $null
+          $env:IXRAY_REPLAY_LIVE_USERDATA = "0"
+          foreach ($prior in @(6828)) {
+            $env:IXRAY_REPLAY_REGISTERED = "$prior"
+            $sample = & $fixture --cohort checks/spawn-mainline/candidate.lua @argsCommon
+            if ($LASTEXITCODE -ne 0) { throw 'Paired connected replay failed' }
+            $sample | Select-String '^(REPLAY|COHORT):' | ForEach-Object {
+              $_.Line | Tee-Object -FilePath checks/SPAWN_GC_CONNECTED.txt -Append
+            }
+            $state = [regex]::Match(($sample -join "`n"), '(\d+) real opens, state (\d+), order (\d+)')
+            if (-not $state.Success) { throw 'Missing connected replay state checksum' }
+            if ($null -eq $reference) { $reference = $state.Value }
+            if ($state.Value -ne $reference) { throw 'Connected spawn state or IO diverged' }
+          }
+
+      - name: Upload connected path results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: IXRay-Prepared-Spawn-Connected-Comparison
+          path: |
+            checks/SPAWN_GC_CONNECTED.txt
+            checks/LUAJIT_RUNTIME.json
+          retention-days: 14

@@ -1,0 +1,23 @@
+name: Windows spawn resource verification replay
+on:
+  push:
+    branches: ['lab/spawn-witness-136']
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Compare exact byte verification with range hashing
+        shell: pwsh
+        run: |
+          cmake -S ci/spawn-witness-lab -B build -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
+          cmake --build build --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+          & build/Release/spawn_witness_bench.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Comparison failed' }

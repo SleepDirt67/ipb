@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.21)
+project(SpawnWitnessBench LANGUAGES CXX)
+add_executable(spawn_witness_bench bench.cpp)
+target_compile_features(spawn_witness_bench PRIVATE cxx_std_20)
+target_include_directories(spawn_witness_bench PRIVATE ../spawn-coverage)
+target_link_libraries(spawn_witness_bench PRIVATE bcrypt)

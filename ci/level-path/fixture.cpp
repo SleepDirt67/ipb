@@ -24,11 +24,13 @@ struct ILevelGraph
     };
     struct Header { float cell_size() const { return 0.7f; } };
     std::vector<CVertex> vertices;
-    std::vector<unsigned char> passable;
+    std::vector<unsigned char> m_access_mask;
+    inline static std::uint64_t graphIdentity = 0;
+    const std::uint64_t m_pathSearchIdentity = ++graphIdentity;
     CVertex* m_nodes;
 
     ILevelGraph(u32 width, u32 height) : vertices(width * height),
-        passable(width * height, 1), m_nodes(vertices.data())
+        m_access_mask(width * height, 1), m_nodes(vertices.data())
     {
         for (u32 z = 0; z < height; ++z)
             for (u32 x = 0; x < width; ++x)
@@ -42,7 +44,8 @@ struct ILevelGraph
 
     Header header() const { return {}; }
     CVertex* vertex(u32 id) const { return &m_nodes[id]; }
-    bool is_accessible(u32 id) const { return id < vertices.size() && passable[id]; }
+    bool valid_vertex_id(u32 id) const { return id < vertices.size(); }
+    bool is_accessible(u32 id) const { return valid_vertex_id(id) && m_access_mask[id]; }
     void unpack_xz(CVertex* v, float& x, float& z) const { x = v->x; z = v->z; }
     bool Search(u32, u32, xr_vector<u32>&, float, u32, u32) const;
     bool Stock(u32, u32, xr_vector<u32>&, float, u32, u32) const;
@@ -72,7 +75,7 @@ int main()
         auto& graph = i % 37 == 0 ? next : small;
         const auto size = static_cast<u32>(graph.vertices.size());
         const u32 start = random() % (size + 1), dest = random() % (size + 1);
-        graph.passable[random() % size] ^= 1;
+        graph.m_access_mask[random() % size] ^= 1;
         const float range = i % 4 ? 10000.f : float(random() % 90);
         Compare(graph, start, dest, range, i % 5 ? 10000 : random() % 80,
             i % 7 ? 4000 : random() % 55);
@@ -81,20 +84,34 @@ int main()
     ILevelGraph large(900, 650);
     // A blocked wall forces exploration of a substantial connected component.
     for (u32 z = 0; z < 650; ++z)
-        large.passable[z * 900 + 610] = 0;
+        large.m_access_mask[z * 900 + 610] = 0;
+    xr_vector<u32> coldPath;
+    const auto coldStart = steady_clock::now();
+    if (large.Search(0, 584999, coldPath, 10000.f, ~0u, ~0u) || !coldPath.empty()) std::abort();
+    const auto coldMs = duration<double, std::milli>(steady_clock::now() - coldStart).count();
     Compare(large, 0, 584999, 10000.f, ~0u, ~0u);
     ILevelGraph directed(180, 160);
     const u32 gap = 150 * 180 + 114;
     for (u32 z = 0; z < 160; ++z)
-        directed.passable[z * 180 + 114] = 0;
-    directed.passable[gap] = 1;
+        directed.m_access_mask[z * 180 + 114] = 0;
+    directed.m_access_mask[gap] = 1;
     directed.vertices[gap + 1].links[0] = ILevelGraph::invalid;
     Compare(directed, 0, 179, 10000.f, ~0u, ~0u);
     Compare(directed, 179, 0, 10000.f, ~0u, ~0u);
     Compare(directed, 0, 179, 40.f, ~0u, ~0u);
     Compare(directed, 0, 179, 10000.f, 10000u, 20000u);
+    // A completed proof must be rejected when a boundary vertex opens.
+    directed.m_access_mask[gap] = 0;
+    Compare(directed, 0, 179, 10000.f, ~0u, ~0u);
+    directed.m_access_mask[gap] = 1;
+    Compare(directed, 0, 179, 10000.f, ~0u, ~0u);
+    // A closed interior vertex cannot turn a proved failure into a route.
+    directed.m_access_mask[gap] = 0;
+    Compare(directed, 0, 179, 10000.f, ~0u, ~0u);
+    directed.m_access_mask[5] = 0;
+    Compare(directed, 1, 179, 10000.f, ~0u, ~0u);
     std::vector<double> stock, candidate;
-    directed.passable[gap] = 0;
+    directed.m_access_mask[gap] = 0;
     for (unsigned i = 0; i < 9; ++i)
     {
         xr_vector<u32> path;
@@ -128,6 +145,7 @@ int main()
     }
     std::sort(stock.begin(), stock.end());
     std::sort(candidate.begin(), candidate.end());
-    std::printf("2506 exact route comparisons; unreachable routes median %.3f -> %.3f ms, max %.3f -> %.3f ms\n",
+    std::printf("2510 exact route comparisons; unreachable routes median %.3f -> %.3f ms, max %.3f -> %.3f ms\n",
         stock[6], candidate[6], stock.back(), candidate.back());
+    std::printf("First blocked search %.3f ms; subsequent queries can reuse the verified boundary\n", coldMs);
 }

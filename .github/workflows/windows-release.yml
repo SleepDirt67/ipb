@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 spawn admission experiment
+name: IX-Ray Windows x64 live spawn and animation experiment
 on:
   push:
     branches: [main, 'experiment/**']
@@ -378,6 +378,19 @@ jobs:
           & checks/serial-frame/Release/collection_index_replay.exe | Tee-Object checks/SPAWN_COLLECTION_INDEX_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Spawn collection differential failed' }
 
+      - name: Compare actual animation startup, notification order and slot precedence
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          python ci/spawn-animation/apply.py ixray checks/spawn-animation-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Animation spawn overlay failed' }
+          cmake -S ci/spawn-animation -B checks/spawn-animation -A x64 "-DANIMATION_GENERATED=$env:GITHUB_WORKSPACE/checks/spawn-animation-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Animation replay configure failed' }
+          cmake --build checks/spawn-animation --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Animation replay compile failed' }
+          & checks/spawn-animation/Release/animation_spawn_replay.exe | Tee-Object checks/SPAWN_ANIMATION_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Animation state or motion lookup diverged' }
+
       - name: Verify the Win32 mapped-view lifetime and measure packed slices
         shell: pwsh
         run: |
@@ -667,7 +680,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Serial-Frame-Experimental-Windows-x64
+          name: IXRay-1.3.6-Live-Spawn-Experimental-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

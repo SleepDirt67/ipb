@@ -11,10 +11,52 @@ foreach ($patch in (Get-ChildItem recipe/pkg/LuaJIT/LuaJIT/1626960173/patch/*.pa
 $indexPatch = (Resolve-Path ci/lua-gc/userdata-index.patch).Path
 git -C luajit apply $indexPatch
 if ($LASTEXITCODE -ne 0) { throw 'Indexed userdata patch rejected' }
-cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64
+cmake -S luajit -B gc-reference-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
 if ($LASTEXITCODE -ne 0) { throw 'LuaJIT configure failed' }
-cmake --build gc-build --config Release --target libluajit --parallel 4
-if ($LASTEXITCODE -ne 0) { throw 'LuaJIT compile failed' }
+cmake --build gc-reference-build --config Release --parallel 4
+if ($LASTEXITCODE -ne 0) { throw 'Reference LuaJIT compile failed' }
+
+New-Item -ItemType Directory -Path gc-reference,gc-candidate | Out-Null
+Copy-Item gc-reference-build/bin/Release/lua51.dll,gc-reference-build/bin/Release/luajit.exe -Destination gc-reference
+$headers = (Resolve-Path luajit/src).Path
+$import = (Resolve-Path gc-reference-build/lib/Release/lua51.lib).Path
+cmake -S ci/lua-gc -B gc-replay -A x64 "-DLUA_HEADERS=$headers" "-DLUA_IMPORT=$import"
+if ($LASTEXITCODE -ne 0) { throw 'Lua GC replay configure failed' }
+cmake --build gc-replay --config Release --parallel 4
+if ($LASTEXITCODE -ne 0) { throw 'Lua GC replay compile failed' }
+
+$tablePatch = (Resolve-Path ci/lua-gc/table-sweep.patch).Path
+git -C luajit apply $tablePatch
+if ($LASTEXITCODE -ne 0) { throw 'Dense table sweep patch rejected' }
+# The generated VM embeds GCState offsets. Generate it in a fresh tree.
+cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+if ($LASTEXITCODE -ne 0) { throw 'Candidate LuaJIT configure failed' }
+cmake --build gc-build --config Release --parallel 4
+if ($LASTEXITCODE -ne 0) { throw 'Candidate LuaJIT compile failed' }
+Copy-Item gc-build/bin/Release/lua51.dll,gc-build/bin/Release/luajit.exe -Destination gc-candidate
+
+foreach ($variant in @('reference', 'candidate')) {
+    Copy-Item gc-replay/Release/*.exe -Destination "gc-$variant"
+    & "gc-$variant/luajit.exe" ci/lua-gc/userdata_replay.lua > "checks/LUAJIT_FINALIZERS_$variant.txt"
+    if ($LASTEXITCODE -ne 0) { throw "$variant userdata semantics failed" }
+    & "gc-$variant/luajit.exe" ci/lua-gc/table_sweep_check.lua | Tee-Object checks/LUAJIT_TABLE_SEMANTICS.txt -Append
+    if ($LASTEXITCODE -ne 0) { throw "$variant table sweep semantics failed" }
+    & "gc-$variant/close_gc_check.exe"
+    if ($LASTEXITCODE -ne 0) { throw "$variant shutdown semantics failed" }
+}
+if ((Get-FileHash checks/LUAJIT_FINALIZERS_reference.txt).Hash -ne (Get-FileHash checks/LUAJIT_FINALIZERS_candidate.txt).Hash) {
+    throw 'Finalizer ordering differed'
+}
+for ($iteration = 0; $iteration -lt 4; ++$iteration) {
+    $variants = if ($iteration % 2) { @('candidate', 'reference') } else { @('reference', 'candidate') }
+    foreach ($tables in @(0, 150000)) {
+        foreach ($variant in $variants) {
+            $sample = & "gc-$variant/binder_gc_bench.exe" 60000 600 105 $tables
+            if ($LASTEXITCODE -ne 0) { throw "$variant binder allocation replay failed" }
+            "$iteration $variant $sample" | Tee-Object checks/LUAJIT_TABLE_SWEEP_WINDOWS.txt -Append
+        }
+    }
+}
 
 $packages = 'ixray/build/x64/Engine-Windows/packages'
 $lib = Get-ChildItem $packages -Recurse -File -Filter lua51.lib
@@ -31,6 +73,7 @@ $identity = [ordered]@{
     upstream_commit = $upstream
     recipe_commit = $recipe
     patch_sha256 = (Get-FileHash -LiteralPath $indexPatch -Algorithm SHA256).Hash.ToLowerInvariant()
+    table_sweep_patch_sha256 = (Get-FileHash -LiteralPath $tablePatch -Algorithm SHA256).Hash.ToLowerInvariant()
     stock_dll_sha256 = $original
     candidate_dll_sha256 = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     candidate_pdb_sha256 = (Get-FileHash -LiteralPath $symbols -Algorithm SHA256).Hash.ToLowerInvariant()

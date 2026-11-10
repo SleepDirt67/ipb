@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(IXRayAnimationReplay LANGUAGES CXX)
+add_executable(animation_spawn_replay fixture.cpp)
+target_compile_features(animation_spawn_replay PRIVATE cxx_std_20)
+target_include_directories(animation_spawn_replay PRIVATE "${ANIMATION_GENERATED}")

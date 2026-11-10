@@ -74,11 +74,12 @@ static void bind_batch(lua_State *L, unsigned frame, unsigned churn)
 int main(int argc, char **argv)
 {
     enum { Frames = 100, Full = 45 };
-    if (argc != 4) return 1;
+    if (argc != 4 && argc != 5) return 1;
     const unsigned live = (unsigned)atoi(argv[1]);
     const unsigned churn = (unsigned)atoi(argv[2]);
     const int pause = atoi(argv[3]);
-    double frame_ms[Frames], full_ms[Full], total = 0, full = 0;
+    const unsigned tables = argc == 5 ? (unsigned)atoi(argv[4]) : 0;
+    double frame_ms[Frames], full_ms[Full];
     lua_State *L = luaL_newstate();
     if (!L) abort();
     luaL_openlibs(L);
@@ -89,6 +90,21 @@ int main(int argc, char **argv)
     lua_createtable(L, (int)live, 0);
     lua_createtable(L, 5, 0);
     fill(L, live, 1, 2);
+    lua_createtable(L, (int)tables, 0);
+    for (unsigned i = 1; i <= tables; ++i) {
+        lua_createtable(L, 2, 1);
+        lua_pushinteger(L, (lua_Integer)i);
+        lua_rawseti(L, -2, 1);
+        lua_createtable(L, 2, 0);
+        lua_pushinteger(L, (lua_Integer)i + 1);
+        lua_rawseti(L, -2, 1);
+        lua_rawseti(L, -2, 2);
+        lua_rawseti(L, 4, (int)i);
+    }
+    for (unsigned i = 1; i <= tables; i += 3) {
+        lua_pushnil(L);
+        lua_rawseti(L, 4, (int)i);
+    }
     lua_gc(L, LUA_GCCOLLECT, 0);
     lua_gc(L, LUA_GCSETPAUSE, pause);
     lua_gc(L, LUA_GCRESTART, 0);
@@ -96,17 +112,22 @@ int main(int argc, char **argv)
         const double start = now();
         bind_batch(L, i, churn);
         frame_ms[i] = now() - start;
-        total += frame_ms[i];
     }
     lua_gc(L, LUA_GCSTOP, 0);
     for (unsigned i = 0; i < Full; ++i) {
         lua_createtable(L, (int)churn, 0);
-        fill(L, churn, 1, 4);
+        fill(L, churn, 1, 5);
         lua_pop(L, 1);
         const double start = now();
         lua_gc(L, LUA_GCCOLLECT, 0);
         full_ms[i] = now() - start;
-        full += full_ms[i];
+    }
+    if (tables >= 2) {
+        lua_rawgeti(L, 4, 2);
+        lua_rawgeti(L, -1, 2);
+        lua_rawgeti(L, -1, 1);
+        if (lua_tointeger(L, -1) != 3) abort();
+        lua_pop(L, 3);
     }
     const int kib = lua_gc(L, LUA_GCCOUNT, 0);
     lua_close(L);
@@ -117,7 +138,8 @@ int main(int argc, char **argv)
     }
     qsort(frame_ms, Frames, sizeof(double), compare);
     qsort(full_ms, Full, sizeof(double), compare);
-    printf("live=%u churn=%u pause=%d, binder %.2f total / %.3f p95 / %.3f max, full %.2f total / %.3f max, %.1f MiB\n",
-           live, churn, pause, total, frame_ms[94], frame_ms[99], full, full_ms[Full-1], kib / 1024.);
+    printf("live=%u tables=%u churn=%u pause=%d, binder %.3f median / %.3f p95 / %.3f max, full %.3f median / %.3f p95 / %.3f max, %.1f MiB\n",
+           live, tables, churn, pause, (frame_ms[49] + frame_ms[50]) / 2, frame_ms[94], frame_ms[99],
+           full_ms[22], full_ms[42], full_ms[Full-1], kib / 1024.);
     return 0;
 }

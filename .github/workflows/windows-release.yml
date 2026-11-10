@@ -391,6 +391,21 @@ jobs:
           & checks/spawn-animation/Release/animation_spawn_replay.exe | Tee-Object checks/SPAWN_ANIMATION_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Animation state or motion lookup diverged' }
 
+      - name: Stage and verify detached visual instances and prepared binder inputs
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          python ci/spawn-detached/apply.py ixray checks/spawn-detached-generated
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual overlay failed' }
+          python ci/spawn-transaction/apply.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Spawn transaction overlay failed' }
+          cmake -S ci/spawn-detached -B checks/spawn-detached -A x64 "-DDETACHED_GENERATED=$env:GITHUB_WORKSPACE/checks/spawn-detached-generated"
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay configure failed' }
+          cmake --build checks/spawn-detached --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay compile failed' }
+          & checks/spawn-detached/Release/detached_visual_replay.exe | Tee-Object checks/SPAWN_DETACHED_VISUALS_WINDOWS.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Detached visual replay failed' }
+
       - name: Verify the Win32 mapped-view lifetime and measure packed slices
         shell: pwsh
         run: |
@@ -680,7 +695,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Live-Spawn-Experimental-Windows-x64
+          name: IXRay-1.3.6-Prepared-Spawn-Experimental-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

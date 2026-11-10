@@ -44,7 +44,9 @@ function replay_spawn()
     local combatReads, soundTypeReads = 0, 0
     local fixtures = {"line", "single", "line2"}
     local order = {}
-    for i = 1, 48 do
+    local actorCount = replay_mode == "cohort" and 9 or 24
+    local themeCount = replay_mode == "cohort" and 569 or 48
+    for i = 1, themeCount do
         local name = string.format("theme%02d", i)
         order[#order + 1] = name
         local config = {}
@@ -53,7 +55,7 @@ function replay_spawn()
             npc_prefix = i % 4 ~= 0,
             group_snd = i % 2 == 0,
             is_combat_sound = i % 7 == 0,
-            avail_communities = i % 6 == 0 and "army" or "stalker",
+            avail_communities = replay_mode ~= "cohort" and i % 6 == 0 and "army" or "stalker",
         }
         theme[name] = npc_sound(config, name)
         if replay_mode == "theme_index" then
@@ -96,7 +98,8 @@ function replay_spawn()
             ordinal[name], total = total, total + 1
         end
     end
-    for i = 1, 24 do
+    if mark_spawn_batch then mark_spawn_batch(true) end
+    for i = 1, actorCount do
         local npc = game_object()
         npc:set_id(i)
         if replay_mode == "npc_override" then
@@ -113,13 +116,14 @@ function replay_spawn()
         with_spawn(npc, init_npc_sound, replay_mode == "foreign_scope")
         assert(npc:sound_prefix() == expected)
     end
+    if mark_spawn_batch then mark_spawn_batch(false) end
     if replay_mode == "debug_hook" then debug.sethook() end
 
     local values = {tostring(combatReads), tostring(soundTypeReads)}
     for _, name in ipairs(order) do
         local entry = theme[name]
         values[#values + 1] = tostring(entry.can_play_group_sound)
-        for i = 1, 24 do
+        for i = 1, actorCount do
             local state, paths = entry.npc[i], entry.sound_path[i]
             if state then
                 assert(state.id == 11000 + (i - 1) * total + ordinal[name])

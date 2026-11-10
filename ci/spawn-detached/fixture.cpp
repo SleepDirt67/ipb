@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -36,7 +37,12 @@ struct CKinematicsAnimated : dxRender_Visual {
 };
 static auto xr_strlen(const char* s) { return std::strlen(s); }
 static void xr_strcpy(char* dst, const char* src) { std::strcpy(dst, src); }
-static void _strlwr(char*) {}
+#ifndef _WIN32
+static void _strlwr(char* text) {
+    for (; *text; ++text)
+        *text = static_cast<char>(std::tolower(static_cast<unsigned char>(*text)));
+}
+#endif
 static char* strext(char* name) { return std::strrchr(name, '.'); }
 template<class T> static void xr_delete(T*& p) { delete p; p = nullptr; }
 
@@ -106,7 +112,7 @@ int main() {
     VERIFY(pool.PrepareReference("npc", 3) && !pool.PrepareReference("npc", 3));
     VERIFY(!pool.Instance_Find("npc") && dxRender_Visual::spawns == 0 && pool.Registry.empty());
     VERIFY(dxRender_Visual::copies == 3 && pool.preparedReferences.at("npc").clones.size() == 3);
-    auto* first = pool.Create("npc");
+    auto* first = pool.Create("NPC.OGF");
     VERIFY(first->origin == 1 && dxRender_Visual::spawns == 1 && dxRender_Visual::loads == 1);
     VERIFY(pool.Models.back().refs == 1 && pool.Registry.count(first) == 1);
     pool.Pool.emplace("npc", first);

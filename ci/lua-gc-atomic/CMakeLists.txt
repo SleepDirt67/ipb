@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(IXRayAtomicFinalizerReplay LANGUAGES C)
+add_executable(atomic_replay atomic_replay.c)
+target_include_directories(atomic_replay PRIVATE "${LUA_HEADERS}")
+target_link_libraries(atomic_replay PRIVATE "${LUA_IMPORT}")

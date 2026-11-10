@@ -1,0 +1,99 @@
+--- a/src/lj_gc.c
++++ b/src/lj_gc.c
+@@ -142,21 +142,29 @@
+   }
+ }
+ 
++typedef struct GCFinalizeQueue {
++  GCobj *first, *last;
++  GCtab *metatable;
++  int has_finalizer;
++} GCFinalizeQueue;
++
+ /* Queue one full userdata, preserving the original newest-first order. */
+-static size_t gc_separateudata(global_State *g, GCobj *o)
++static size_t gc_separateudata(global_State *g, GCFinalizeQueue *queue, GCobj *o)
+ {
++  GCtab *mt;
+   if (isfinalized(gco2ud(o))) return 0;
+   markfinalized(o);
+-  if (!lj_meta_fastg(g, tabref(gco2ud(o)->metatable), MM_gc))
+-    return 0;
+-  if (gcref(g->gc.mmudata)) {
+-    GCobj *root = gcref(g->gc.mmudata);
+-    setgcrefr(o->gch.nextgc, root->gch.nextgc);
+-    setgcref(root->gch.nextgc, o);
+-  } else {
+-    setgcref(o->gch.nextgc, o);
+-  }
+-  setgcref(g->gc.mmudata, o);
++  mt = tabref(gco2ud(o)->metatable);
++  if (mt != queue->metatable) {
++    queue->metatable = mt;
++    queue->has_finalizer = lj_meta_fastg(g, mt, MM_gc) != NULL;
++  }
++  if (!queue->has_finalizer) return 0;
++  if (queue->last)
++    setgcref(queue->last->gch.nextgc, o);
++  else
++    queue->first = o;
++  queue->last = o;
+   return sizeudata(gco2ud(o));
+ }
+ 
+@@ -167,6 +175,9 @@
+   GCRef *list = mref(g->gc.udatalist, GCRef);
+   uint32_t *white = mref(g->gc.udwhite, uint32_t);
+   MSize len = g->gc.udatalen;
++  GCFinalizeQueue queue = {NULL, gcref(g->gc.mmudata), NULL, 0};
++  if (queue.last)
++    queue.first = gcnext(queue.last);
+   if (LJ_UNLIKELY(all)) {
+     MSize i;
+     if (g->gc.udatasweepend) {
+@@ -179,7 +190,7 @@
+     }
+     for (i = len; i != 0;) {
+       GCobj *o = gcref(list[--i]);
+-      size += gc_separateudata(g, o);
++      size += gc_separateudata(g, &queue, o);
+     }
+     if (len) memset(white, 0, ((len + 31) >> 5) * sizeof(uint32_t));
+     for (i = 0; i < len; i++) {
+@@ -202,12 +213,24 @@
+         */
+         if (isfinalized(gco2ud(o))) continue;
+ 	lj_assertG(o && iswhite(o), "invalid userdata candidate");
+-	size += gc_separateudata(g, o);
++	{
++	  size_t queued = gc_separateudata(g, &queue, o);
++	  if (queued) {
++	    /* Mark this userdata in queue order. Marking its two table refs
++	    ** only appends gray work, which is propagated after separation. */
++	    gc_mark(g, o);
++	    size += queued;
++	  }
++	}
+       }
+       if (word == 0) break;
+       candidates = white[--word];
+     }
+   }
++  if (queue.last) {
++    setgcref(queue.last->gch.nextgc, queue.first);
++    setgcref(g->gc.mmudata, queue.last);
++  }
+   return size;
+ }
+ 
+@@ -779,8 +802,8 @@
+   setgcrefnull(g->gc.grayagain);
+   gc_propagate_gray(g);  /* Propagate it. */
+ 
+-  udsize = lj_gc_separateudata(g, 0);  /* Separate userdata to be finalized. */
+-  gc_mark_mmudata(g);  /* Mark them. */
++  gc_mark_mmudata(g);  /* Mark the pending prefix before appending new entries. */
++  udsize = lj_gc_separateudata(g, 0);  /* Queue and mark new userdata in order. */
+   udsize += gc_propagate_gray(g);  /* And propagate the marks. */
+ 
+   /* All marking done, clear weak tables. */

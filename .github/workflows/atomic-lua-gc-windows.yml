@@ -1,0 +1,83 @@
+name: Windows LuaJIT atomic userdata replay
+on:
+  push:
+    branches: ['lab/atomic-lua-gc-136']
+permissions:
+  contents: read
+jobs:
+  paired:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: LuaJIT/LuaJIT
+          ref: dbb6c39f7c69691f6bd9a8b5d6bf7c97b3dbe268
+          path: luajit
+          persist-credentials: false
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: imesense/packages-collection
+          ref: 02c62d81bc3ab8a46c37efa3c13af3217afa9e08
+          path: recipe
+          persist-credentials: false
+      - name: Build two independent versions of the played runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($patch in (Get-ChildItem recipe/pkg/LuaJIT/LuaJIT/1626960173/patch/*.patch | Sort-Object Name)) {
+            git -C luajit apply $patch.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned recipe patch failed' }
+          }
+          foreach ($name in @('userdata-index','table-sweep')) {
+            $patch = (Resolve-Path "ci/lua-gc/$name.patch").Path
+            git -C luajit apply $patch
+            if ($LASTEXITCODE -ne 0) { throw "Played runtime patch failed: $name" }
+          }
+          foreach ($variant in @('reference','candidate')) {
+            if ($variant -eq 'candidate') {
+              $patch = (Resolve-Path ci/lua-gc-atomic/atomic-finalizers.patch).Path
+              git -C luajit apply $patch
+              if ($LASTEXITCODE -ne 0) { throw 'Atomic pass patch failed' }
+            }
+            cmake -S luajit -B "build-$variant" -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+            if ($LASTEXITCODE -ne 0) { throw "$variant configure failed" }
+            cmake --build "build-$variant" --config Release --parallel 4
+            if ($LASTEXITCODE -ne 0) { throw "$variant compile failed" }
+          }
+          python ci/lua-gc/verify_abi.py build-reference/bin/Release/lua51.dll build-candidate/bin/Release/lua51.dll
+          if ($LASTEXITCODE -ne 0) { throw 'ABI changed' }
+          $headers = (Resolve-Path luajit/src).Path
+          $import = (Resolve-Path build-reference/lib/Release/lua51.lib).Path
+          cmake -S ci/lua-gc-atomic -B replay -A x64 "-DLUA_HEADERS=$headers" "-DLUA_IMPORT=$import"
+          if ($LASTEXITCODE -ne 0) { throw 'Replay configure failed' }
+          cmake --build replay --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'Replay build failed' }
+      - name: Compare finalizer order and atomic-step latency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($variant in @('reference','candidate')) {
+            $bin = "build-$variant/bin/Release"
+            Copy-Item replay/Release/atomic_replay.exe $bin
+            & "$bin/luajit.exe" ci/lua-gc/userdata_replay.lua > "$variant-finalizers.txt"
+            if ($LASTEXITCODE -ne 0) { throw 'Userdata finalization semantics failed' }
+            & "$bin/luajit.exe" ci/lua-gc/table_sweep_check.lua
+            if ($LASTEXITCODE -ne 0) { throw 'Table semantics failed' }
+          }
+          if ((Get-FileHash reference-finalizers.txt).Hash -ne (Get-FileHash candidate-finalizers.txt).Hash) {
+            throw 'Finalizer order differs'
+          }
+          foreach ($size in @(8192,32768,120000,240000)) {
+            for ($i = 0; $i -lt 11; ++$i) {
+              $order = if ($i % 2) { @('candidate','reference') } else { @('reference','candidate') }
+              foreach ($variant in $order) {
+                $result = & "build-$variant/bin/Release/atomic_replay.exe" $size
+                if ($LASTEXITCODE -ne 0) { throw "$variant atomic phase replay failed" }
+                "$variant $result"
+              }
+            }
+          }

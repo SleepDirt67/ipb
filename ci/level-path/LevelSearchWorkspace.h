@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -14,9 +15,9 @@ class Workspace
         float cost;
         std::uint32_t parent;
         std::uint32_t generation;
-        std::uint32_t probeGeneration;
         bool expanded;
     };
+    static constexpr std::size_t maxBoundaryChecks = 4096;
     static constexpr unsigned pageBits = 10;
     static constexpr unsigned pageSize = 1u << pageBits;
     using Page = std::array<Node, pageSize>;
@@ -24,6 +25,22 @@ class Workspace
     std::uint32_t generation_ = 0;
     std::uint32_t visited_ = 0;
     const void* graph_ = nullptr;
+    std::uint64_t graphIdentity_ = 0;
+    std::size_t probeWords_ = 0;
+    struct Region
+    {
+        std::vector<std::uint64_t> reached;
+        std::vector<std::uint32_t> boundary;
+
+        bool Contains(std::uint32_t vertex) const
+        {
+            return vertex / 64 < reached.size() &&
+                (reached[vertex / 64] & (std::uint64_t{1} << (vertex % 64))) != 0;
+        }
+    };
+    Region probe_, proven_;
+    std::vector<std::uint64_t> blocked_;
+
     std::vector<std::uint32_t> probeQueue_;
     std::size_t probeHead_ = 0;
     std::uint32_t reopenings_ = 0;
@@ -40,29 +57,53 @@ class Workspace
         return (*slot)[vertex & (pageSize - 1)];
     }
 
+    static bool SetBit(std::vector<std::uint64_t>& bits, std::uint32_t vertex)
+    {
+        auto& word = bits[vertex / 64];
+        const auto bit = std::uint64_t{1} << (vertex % 64);
+        const bool fresh = (word & bit) == 0;
+        word |= bit;
+        return fresh;
+    }
+
     void AddProbeVertex(std::uint32_t vertex)
     {
-        auto& node = Slot(vertex);
-        if (node.probeGeneration != generation_)
-        {
-            node.probeGeneration = generation_;
+        if (SetBit(probe_.reached, vertex))
             probeQueue_.push_back(vertex);
-        }
     }
 
 public:
-    void Begin(const void* graph)
+    void Begin(const void* graph, std::uint64_t identity, std::size_t vertexCount)
     {
-        if (graph_ != graph || ++generation_ == 0)
+        if (graph_ != graph || graphIdentity_ != identity)
+        {
+            proven_.reached.clear();
+            proven_.boundary.clear();
+            graph_ = graph;
+            graphIdentity_ = identity;
+            generation_ = 0;
+            pages_.clear();
+        }
+        if (++generation_ == 0)
         {
             pages_.clear();
-            graph_ = graph;
             generation_ = 1;
         }
+        probeWords_ = (vertexCount + 63) / 64;
         visited_ = reopenings_ = 0;
         probeQueue_.clear();
         probeHead_ = 0;
         probeFoundTarget_ = false;
+    }
+
+    template<class IsAccessible>
+    bool ReuseProof(std::uint32_t start, std::uint32_t target, const IsAccessible& accessible) const
+    {
+        // With all recorded exits still closed, no path can leave this
+        // region. Newly blocked vertices inside it cannot invalidate that.
+        return proven_.Contains(start) && !proven_.Contains(target) &&
+            proven_.boundary.size() <= maxBoundaryChecks &&
+            std::none_of(proven_.boundary.begin(), proven_.boundary.end(), accessible);
     }
 
     const Node* Find(std::uint32_t vertex) const
@@ -104,13 +145,23 @@ public:
         if (probeFoundTarget_ || ++reopenings_ < initialWork || reopenings_ % batch != 0)
             return false;
         if (probeQueue_.empty())
+        {
+            probe_.reached.assign(probeWords_, 0);
+            probe_.boundary.clear();
+            blocked_.assign(probeWords_, 0);
             AddProbeVertex(start);
+        }
         auto budget = reopenings_ == initialWork ? initialWork : batch;
         while (probeHead_ != probeQueue_.size() && budget-- != 0)
         {
             const auto vertex = probeQueue_[probeHead_++];
-            visit(vertex, [&](std::uint32_t next) {
-                if (next == target)
+            visit(vertex, [&](std::uint32_t next, bool accessible) {
+                if (!accessible)
+                {
+                    if (probe_.boundary.size() <= maxBoundaryChecks && SetBit(blocked_, next))
+                        probe_.boundary.push_back(next);
+                }
+                else if (next == target)
                     probeFoundTarget_ = true;
                 else
                     AddProbeVertex(next);
@@ -118,7 +169,10 @@ public:
             if (probeFoundTarget_)
                 return false;
         }
-        return probeHead_ == probeQueue_.size();
+        if (probeHead_ != probeQueue_.size())
+            return false;
+        std::swap(proven_, probe_);
+        return true;
     }
 
     std::uint32_t Visited() const { return visited_; }

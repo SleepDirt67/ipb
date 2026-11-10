@@ -11,15 +11,15 @@ foreach ($patch in (Get-ChildItem recipe/pkg/LuaJIT/LuaJIT/1626960173/patch/*.pa
 $indexPatch = (Resolve-Path ci/lua-gc/userdata-index.patch).Path
 git -C luajit apply $indexPatch
 if ($LASTEXITCODE -ne 0) { throw 'Indexed userdata patch rejected' }
-cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+cmake -S luajit -B gc-reference-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
 if ($LASTEXITCODE -ne 0) { throw 'LuaJIT configure failed' }
-cmake --build gc-build --config Release --parallel 4
+cmake --build gc-reference-build --config Release --parallel 4
 if ($LASTEXITCODE -ne 0) { throw 'Reference LuaJIT compile failed' }
 
 New-Item -ItemType Directory -Path gc-reference,gc-candidate | Out-Null
-Copy-Item gc-build/bin/Release/lua51.dll,gc-build/bin/Release/luajit.exe -Destination gc-reference
+Copy-Item gc-reference-build/bin/Release/lua51.dll,gc-reference-build/bin/Release/luajit.exe -Destination gc-reference
 $headers = (Resolve-Path luajit/src).Path
-$import = (Resolve-Path gc-build/lib/Release/lua51.lib).Path
+$import = (Resolve-Path gc-reference-build/lib/Release/lua51.lib).Path
 cmake -S ci/lua-gc -B gc-replay -A x64 "-DLUA_HEADERS=$headers" "-DLUA_IMPORT=$import"
 if ($LASTEXITCODE -ne 0) { throw 'Lua GC replay configure failed' }
 cmake --build gc-replay --config Release --parallel 4
@@ -28,6 +28,9 @@ if ($LASTEXITCODE -ne 0) { throw 'Lua GC replay compile failed' }
 $tablePatch = (Resolve-Path ci/lua-gc/table-sweep.patch).Path
 git -C luajit apply $tablePatch
 if ($LASTEXITCODE -ne 0) { throw 'Dense table sweep patch rejected' }
+# The generated VM embeds GCState offsets. Generate it in a fresh tree.
+cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
+if ($LASTEXITCODE -ne 0) { throw 'Candidate LuaJIT configure failed' }
 cmake --build gc-build --config Release --parallel 4
 if ($LASTEXITCODE -ne 0) { throw 'Candidate LuaJIT compile failed' }
 Copy-Item gc-build/bin/Release/lua51.dll,gc-build/bin/Release/luajit.exe -Destination gc-candidate

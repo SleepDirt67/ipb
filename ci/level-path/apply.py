@@ -31,7 +31,7 @@ change('''	struct SearchNode {
 	thread_local std::pmr::unordered_map<u32, SearchNode> nodes{ &pool_resource };''',
 '''	thread_local xr_vector<std::pair<float, u32>> TempPriorityNode;
 	thread_local LevelSearch::Workspace nodes;''')
-change('	nodes.clear();', '	nodes.Begin(m_nodes);')
+change('	nodes.clear();', '	nodes.Begin(m_nodes, m_pathSearchIdentity, m_access_mask.size());')
 change('	nodes.emplace(FromID, SearchNode{ 0.f, FromID });', '	nodes.Set(FromID, 0.f, FromID);')
 change('nodes.find(NextNode)->second.parent', 'nodes.Find(NextNode)->parent')
 change('		const SearchNode& current = nodes.find(CurrentNodeID)->second;',
@@ -61,16 +61,37 @@ change('			nodes.Set(NeighborID, NewCost, CurrentNodeID);',
 				const auto* vertex = this->vertex(current);
 				for (s32 edge = 0; edge < 4; ++edge) {
 					const u32 next = vertex->link(edge);
-					if (is_accessible(next))
-						add(next);
+					if (valid_vertex_id(next))
+						add(next, is_accessible(next));
 				}
 			}))
 				return false;
 
 			nodes.Set(NeighborID, NewCost, CurrentNodeID);''')
 
-output = (text[:start] + candidate + text[end:]).replace(
-    '#include "level_graph.h"', '#include "level_graph.h"\n#include "LevelSearchWorkspace.h"', 1).encode("utf-8")
+change("""	CVertex* target_vertex = vertex(ToID);""",
+       """#ifndef _EDITOR
+    if (nodes.ReuseProof(FromID, ToID, [this](u32 vertex) { return is_accessible(vertex); }))
+        return false;
+#endif
+	CVertex* target_vertex = vertex(ToID);""")
+
+header = path.with_suffix(".h")
+header_raw = header.read_bytes()
+old = b"xr_vector<bool>\t\t\tm_access_mask;"
+if header_raw.count(old) != 1:
+    raise ValueError("Level graph access mask drift")
+eol = b"\r\n" if b"\r\n" in header_raw else b"\n"
+header.write_bytes(header_raw.replace(old, old + eol + b"    const u64 m_pathSearchIdentity;", 1))
+
+ctor = "ILevelGraph::ILevelGraph(): m_header(nullptr), m_nodes(nullptr), m_level_id(0),"
+assert text.count(ctor) == 1
+prefix = text[:start].replace(ctor, """namespace { std::atomic<u64> pathGraphIdentity{0}; }
+
+ILevelGraph::ILevelGraph(): m_header(nullptr), m_nodes(nullptr), m_pathSearchIdentity(++pathGraphIdentity), m_level_id(0),""")
+
+output = (prefix + candidate + text[end:]).replace(
+    '#include "level_graph.h"', '#include "level_graph.h"\n#include "LevelSearchWorkspace.h"\n#include <atomic>', 1).encode("utf-8")
 if b"\r\n" in original and b"\n" not in original.replace(b"\r\n", b""):
     output = output.replace(b"\n", b"\r\n")
 path.write_bytes(output)

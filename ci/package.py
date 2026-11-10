@@ -45,6 +45,7 @@ lua_runtime = json.loads(Path('checks/LUAJIT_RUNTIME.json').read_text(encoding='
 assert digest(bin_path / 'lua51.dll') == lua_runtime['candidate_dll_sha256']
 assert digest(symbol_root / 'lua51.pdb') == lua_runtime['candidate_pdb_sha256']
 assert digest(Path('ci/lua-gc/userdata-index.patch')) == lua_runtime['patch_sha256']
+assert digest(Path('ci/lua-gc/table-sweep.patch')) == lua_runtime['table_sweep_patch_sha256']
 shutil.copy2('LICENSE.md', package / 'LICENSE.md')
 for name in ('INSTALL.cmd', 'RESTORE.cmd', 'RUN_PERFORMANCE.cmd', 'install.ps1', 'restore.ps1',
              'installation_common.ps1', 'run.ps1'):
@@ -52,7 +53,7 @@ for name in ('INSTALL.cmd', 'RESTORE.cmd', 'RUN_PERFORMANCE.cmd', 'install.ps1',
 for path in Path('checks').iterdir():
     if path.is_file() and path.suffix in ('.txt', '.json'):
         shutil.copy2(path, checks / path.name)
-for name in ('ci/source-lock.json', 'ci/lua-gc/userdata-index.patch'):
+for name in ('ci/source-lock.json', 'ci/lua-gc/userdata-index.patch', 'ci/lua-gc/table-sweep.patch'):
     shutil.copy2(name, source / Path(name).name)
 # Archive the exact engine delta plus newly generated files before packaging.
 (source / 'engine.patch').write_bytes(subprocess.check_output(

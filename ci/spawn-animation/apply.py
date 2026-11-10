@@ -35,8 +35,7 @@ edit(shared, [
 ])
 edit(engine / "SkeletonMotions.h", [
     ("anim_notify_prefetched& motion_notify\t(u16 idx, u16 bone)\t\t{\tVERIFY(p_); return p_->m_notifies[idx][bone];\t\t\t}",
-     """bool has_motion_notifies() const { return p_ && !p_->m_notifies.empty(); }
-    const anim_notify_prefetched* find_motion_notify(u16 idx, u16 bone) const
+     """const anim_notify_prefetched* find_motion_notify(u16 idx, u16 bone) const
     {
         VERIFY(p_);
         if (idx >= p_->m_notifies.size())
@@ -56,8 +55,7 @@ edit(engine / "SkeletonMotions.cpp", [
 edit(animation / "SkeletonAnimated.h", [
     ('#include "SkeletonCustom.h"', '#include "SkeletonCustom.h"\n#include <memory>'),
     ("\tvoid\t\t\t\t\t\tIBlend_Startup\t\t\t();",
-     """    bool hasMotionNotifies = false;
-#ifndef _EDITOR
+     """#ifndef _EDITOR
     struct MotionLookup;
     std::shared_ptr<const MotionLookup> motionLookup;
 #endif
@@ -78,13 +76,11 @@ load_binding = both[start:stop]
 start = both.index(binding, stop)
 stop = both.index("\n\t// Reinit blend pool", start)
 append_binding = both[start:stop]
-new_binding = """    hasMotionNotifies = false;
-#ifndef _EDITOR
+new_binding = """#ifndef _EDITOR
     auto lookup = std::make_shared<MotionLookup>();
 #endif
     for (SMotionsSlot& slot : m_Motions)
     {
-        hasMotionNotifies |= slot.motions.has_motion_notifies();
         slot.bone_motions.clear();
         slot.bone_motions.reserve(bones->size());
         for (const auto* bone : *bones)
@@ -101,18 +97,36 @@ new_binding = """    hasMotionNotifies = false;
 #endif
 """
 edit(source, [
+    ("""\tblend_pool.clear\t();
+\tfor (u32 i=0; i<MAX_BLENDED_POOL; i++)
+\t{
+\t\tblend_pool.push_back(B);
+#ifdef\tDEBUG
+\t\tblend_pool.back().set_free_state();
+#endif
+\t}""",
+     """    blend_pool.resize(MAX_BLENDED_POOL);
+    for (auto& slot : blend_pool)
+    {
+#ifndef DEBUG
+        // Retain the container of a used slot. Assignment from an empty map
+        // follows the original bucket policy, including when it affects a
+        // later sequence of notifications after this reset.
+        if (slot.notifies && !B.notifies)
+            B.notifies.emplace();
+        else if (!slot.notifies && B.notifies)
+            B.notifies.reset();
+#endif
+        slot = B;
+#ifdef DEBUG
+        slot.set_free_state();
+#endif
+    }"""),
     ("""\tfor (u32 i = 0; i < P.bones.size(); i++)
 \t{
 \t\tB->notifies[(*bones)[P.bones[i]]->GetSelfID()] = {};
 \t}""",
-     """    // The release reset discards all per-blend state after an append.
-    // Models with notifications keep the original insertion and visit order.
-#ifdef DEBUG
-    const bool useNotifies = true;
-#else
-    const bool useNotifies = hasMotionNotifies;
-#endif
-    if (useNotifies && !P.bones.empty())
+     """    if (!P.bones.empty())
     {
         if (!B->notifies)
             B->notifies.emplace();
@@ -129,8 +143,7 @@ edit(source, [
 \t\t\tnotify.key = Notify.order[i];
 \t\t\tnotify.assigned = Notify.data[notify.key];
 \t\t}""",
-     """        if (useNotifies)
-        {
+     """        {
             const u16 bone = (*bones)[P.bones[i]]->GetSelfID();
             auto& slot = (*B->notifies)[bone];
             const auto* notify = m_Motions[motion_ID.slot].motions.find_motion_notify(motion_ID.idx, bone);
@@ -153,7 +166,6 @@ edit(source, [
                 continue;
 \t\t\tfor (auto& BoneNotify : *B.notifies)"""),
     ("\tPCOPY\t\t\t(m_Motions);", """\tPCOPY\t\t\t(m_Motions);
-    PCOPY(hasMotionNotifies);
 #ifndef _EDITOR
     PCOPY(motionLookup);
 #endif"""),

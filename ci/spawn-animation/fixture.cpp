@@ -37,7 +37,7 @@ struct anim_notify { unsigned id; };
 template<class T> using xr_vector = std::vector<T>;
 template<class K, class V> using xr_hash_map = std::unordered_map<K, V>;
 #define IC inline
-#define VERIFY(value) do { if (!(value)) std::abort(); } while (false)
+#define VERIFY(value) do { if (!(value)) { std::fprintf(stderr, "%s:%d: %s\n", __FILE__, __LINE__, #value); std::abort(); } } while (false)
 #define VERIFY2(value, msg) VERIFY(value)
 #define NODEFAULT std::abort()
 #define CopyMemory(destination, source, size) std::memcpy(destination, source, size)
@@ -86,7 +86,6 @@ struct CKinematicsAnimated { \
     Partition* m_Partition = &partition; \
     std::vector<Bone*>* bones = nullptr; \
     std::vector<u16> started; \
-    bool hasMotionNotifies = false; \
     void ChannelFactorsStartup() {} \
     void IBlend_Startup(); \
     CBlend* IBlend_Create() { for (auto& b : blend_pool) if (b.blend_state() == CBlend::eFREE_SLOT) return &b; return nullptr; } \
@@ -159,7 +158,6 @@ int main() {
     }
     anim_notify event{7};
     for (bool hasNotifies : {false, true}) {
-        b.hasMotionNotifies = hasNotifies;
         if (hasNotifies) {
             for (u16 bone : {1, 5, 17, 20, 39, 42, 53, 70}) {
                 MotionNotify note;
@@ -183,10 +181,10 @@ int main() {
                 VERIFY(old && next && a.started == b.started);
                 const auto expected = callbacks(old->notifies);
                 VERIFY((next->notifies ? callbacks(*next->notifies) : std::vector<unsigned>{}) == expected);
-                if (hasNotifies) {
-                    for (const auto& [bone, slot] : old->notifies)
-                        VERIFY(next->notifies->at(bone).current_notify_index == slot.current_notify_index);
-                }
+                VERIFY(next->notifies);
+                VERIFY(next->notifies->bucket_count() == old->notifies.bucket_count());
+                for (const auto& [bone, slot] : old->notifies)
+                    VERIFY(next->notifies->at(bone).current_notify_index == slot.current_notify_index);
                 old->set_free_state();
                 next->set_free_state();
             }

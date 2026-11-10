@@ -1,0 +1,203 @@
+--- a/src/lj_gc.c
++++ b/src/lj_gc.c
+@@ -27,6 +27,9 @@
+ #include "lj_trace.h"
+ #include "lj_dispatch.h"
+ #include "lj_vm.h"
++#if defined(_MSC_VER) && LJ_TARGET_X64
++#include <xmmintrin.h>
++#endif
+ 
+ #define GCSTEPSIZE	1024u
+ #define GCSWEEPMAX	40
+@@ -194,6 +197,10 @@
+ 	MSize index = word * 32 + bit;
+ 	GCobj *o = gcref(list[index]);
+ 	candidates &= ~((uint32_t)1 << bit);
++        /* Full GC can restart after sweep with finalizers still pending.
++        ** Those userdata remain marked and are already on mmudata.
++        */
++        if (isfinalized(gco2ud(o))) continue;
+ 	lj_assertG(o && iswhite(o), "invalid userdata candidate");
+ 	size += gc_separateudata(g, o);
+       }
+@@ -466,6 +473,61 @@
+   return p;
+ }
+ 
++/* Tables have no finalizers. Sweep their headers directly from a dense
++** index, without serially loading unrelated root nodes. Allocations made
++** after the boundary are current white and need at most pointer compaction.
++*/
++static uint32_t gc_sweeptables(global_State *g, uint32_t limit)
++{
++  GCRef *list = mref(g->gc.tablist, GCRef);
++  int ow = otherwhite(g);
++  MSize read = g->gc.tabsweep, write = g->gc.tabout;
++  MSize end = g->gc.tabsweepend;
++  while (read < end && limit != 0) {
++    GCobj *o = gcref(list[read]);
++    if (end - read > 8) {
++#if defined(_MSC_VER) && LJ_TARGET_X64
++      _mm_prefetch((const char *)gcref(list[read + 8]), _MM_HINT_T0);
++#elif defined(__GNUC__) || defined(__clang__)
++      __builtin_prefetch(gcref(list[read + 8]), 1, 3);
++#endif
++    }
++    ++read;
++    --limit;
++    if (((o->gch.marked ^ LJ_GC_WHITES) & ow)) {
++      makewhite(g, o);
++      if (write != read - 1) setgcref(list[write], o);
++      ++write;
++    } else {
++      lj_tab_free(g, gco2tab(o));
++    }
++  }
++  if (read >= end) {
++    if (write != read) {
++      MSize count = g->gc.tablen - read;
++      if (count > limit) count = limit;
++      if (count) {
++        memmove(list + write, list + read, count * sizeof(GCRef));
++        read += count;
++        write += count;
++        limit -= count;
++      }
++    } else {
++      read = write = g->gc.tablen;
++    }
++    if (read == g->gc.tablen) {
++      g->gc.tablen = write;
++      g->gc.tabsweep = g->gc.tabout = 0;
++      g->gc.tabsweepend = ~(MSize)0;
++      return limit;
++    }
++  }
++  g->gc.tabsweep = read;
++  g->gc.tabout = write;
++  g->gc.tabsweepend = end;
++  return limit;
++}
++
+ /* Compact survivors in allocation order. New allocations are current white
+ ** and stay outside the range that is checked for dead objects.
+ */
+@@ -668,6 +730,14 @@
+   /* Free everything, except super-fixed objects (the main thread). */
+   g->gc.currentwhite = LJ_GC_WHITES | LJ_GC_SFIXED;
+   gc_fullsweep(g, &g->gc.root);
++  if (g->gc.tabcap) {
++    GCRef *list = mref(g->gc.tablist, GCRef);
++    for (i = 0; i < g->gc.tablen; i++) {
++      if (i < g->gc.tabout || i >= g->gc.tabsweep)
++        lj_tab_free(g, &gcref(list[i])->tab);
++    }
++    lj_mem_freevec(g, list, g->gc.tabcap, GCRef);
++  }
+   /* Sweep may be partially compacted when the VM is closed. */
+   {
+     GCRef *list = mref(g->gc.udatalist, GCRef);
+@@ -722,6 +792,7 @@
+   g->gc.currentwhite = (uint8_t)otherwhite(g);  /* Flip current white. */
+   g->strempty.marked = g->gc.currentwhite;
+   setmref(g->gc.sweep, &g->gc.root);
++  g->gc.tabsweepend = g->gc.tablen;
+   g->gc.estimate = g->gc.total - (GCSize)udsize;  /* Initial estimate. */
+ }
+ 
+@@ -759,11 +830,15 @@
+     uint32_t remaining;
+     GCRef *pos = gc_sweep(g, mref(g->gc.sweep, GCRef), GCSWEEPMAX, &remaining);
+     setmref(g->gc.sweep, pos);
+-    if (!gcref(*pos))
+-      gc_sweepudata(g, remaining);
++    if (!gcref(*pos)) {
++      if (g->gc.tabsweepend != ~(MSize)0)
++        remaining = gc_sweeptables(g, remaining);
++      if (g->gc.tabsweepend == ~(MSize)0)
++        gc_sweepudata(g, remaining);
++    }
+     lj_assertG(old >= g->gc.total, "sweep increased memory");
+     g->gc.estimate -= old - g->gc.total;
+-    if (!gcref(*pos) && !g->gc.udatasweepend) {
++    if (!gcref(*pos) && g->gc.tabsweepend == ~(MSize)0 && !g->gc.udatasweepend) {
+       if (g->strnum <= (g->strmask >> 2) && g->strmask > LJ_MIN_STRTAB*2-1)
+ 	lj_str_resize(L, g->strmask >> 1);  /* Shrink string table. */
+       if (gcref(g->gc.mmudata)) {  /* Need any finalizations? */
+@@ -860,6 +935,7 @@
+   setvmstate(g, GC);
+   if (g->gc.state <= GCSatomic) {  /* Caught somewhere in the middle. */
+     setmref(g->gc.sweep, &g->gc.root);  /* Sweep everything (preserving it). */
++    g->gc.tabsweepend = g->gc.tablen;
+     setgcrefnull(g->gc.gray);  /* Reset lists from partial propagation. */
+     setgcrefnull(g->gc.grayagain);
+     setgcrefnull(g->gc.weak);
+@@ -971,6 +1047,25 @@
+   return o;
+ }
+ 
++GCtab * LJ_FASTCALL lj_mem_newgctab(lua_State *L, GCSize size)
++{
++  global_State *g = G(L);
++  GCRef *list = mref(g->gc.tablist, GCRef);
++  MSize index = g->gc.tablen;
++  GCobj *o;
++  if (index == g->gc.tabcap) {
++    list = (GCRef *)lj_mem_grow(L, list, &g->gc.tabcap,
++                              LJ_MAX_MEM32 / sizeof(GCRef), sizeof(GCRef));
++    setmref(g->gc.tablist, list);
++  }
++  o = (GCobj *)lj_mem_realloc(L, NULL, 0, size);
++  newwhite(g, o);
++  setgcrefnull(o->gch.nextgc);
++  setgcref(list[index], o);
++  g->gc.tablen = index + 1;
++  return &o->tab;
++}
++
+ /* Resize growable vector. */
+ void *lj_mem_grow(lua_State *L, void *p, MSize *szp, MSize lim, MSize esz)
+ {
+--- a/src/lj_gc.h
++++ b/src/lj_gc.h
+@@ -111,6 +111,7 @@
+ /* Allocator. */
+ LJ_FUNC void *lj_mem_realloc(lua_State *L, void *p, GCSize osz, GCSize nsz);
+ LJ_FUNC void * LJ_FASTCALL lj_mem_newgco(lua_State *L, GCSize size);
++LJ_FUNC GCtab * LJ_FASTCALL lj_mem_newgctab(lua_State *L, GCSize size);
+ LJ_FUNC void *lj_mem_grow(lua_State *L, void *p,
+ 			  MSize *szp, MSize lim, MSize esz);
+ 
+--- a/src/lj_obj.h
++++ b/src/lj_obj.h
+@@ -598,6 +598,9 @@
+   GCRef grayagain;	/* List of objects for atomic traversal. */
+   GCRef weak;		/* List of weak tables (to be cleared). */
+   GCRef mmudata;	/* List of userdata (to be finalized). */
++  MRef tablist;		/* Dense table headers in allocation order. */
++  MSize tabcap, tablen;
++  MSize tabsweepend, tabsweep, tabout;
+   MRef udatalist;	/* Full userdata, oldest first. */
+   MRef udwhite;		/* 32 slots per word, set until marked. */
+   MSize udwhitecap;
+--- a/src/lj_tab.c
++++ b/src/lj_tab.c
+@@ -85,7 +85,7 @@
+   if (LJ_MAX_COLOSIZE != 0 && asize > 0 && asize <= LJ_MAX_COLOSIZE) {
+     Node *nilnode;
+     lj_assertL((sizeof(GCtab) & 7) == 0, "bad GCtab size");
+-    t = (GCtab *)lj_mem_newgco(L, sizetabcolo(asize));
++    t = lj_mem_newgctab(L, sizetabcolo(asize));
+     t->gct = ~LJ_TTAB;
+     t->nomm = (uint8_t)~0;
+     t->colo = (int8_t)asize;
+@@ -100,7 +100,7 @@
+ #endif
+   } else {  /* Otherwise separately allocate the array part. */
+     Node *nilnode;
+-    t = lj_mem_newobj(L, GCtab);
++    t = lj_mem_newgctab(L, sizeof(GCtab));
+     t->gct = ~LJ_TTAB;
+     t->nomm = (uint8_t)~0;
+     t->colo = 0;

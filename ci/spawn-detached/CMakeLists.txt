@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(IXRayDetachedVisualReplay LANGUAGES CXX)
+add_executable(detached_visual_replay fixture.cpp)
+target_compile_features(detached_visual_replay PRIVATE cxx_std_20)
+target_include_directories(detached_visual_replay PRIVATE "${DETACHED_GENERATED}")

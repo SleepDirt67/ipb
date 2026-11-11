@@ -100,9 +100,23 @@ def apply(root, checks):
 
     def pacing(source):
         source = one(source, "namespace PacingDiag\n", '#include "BinderCaptureEngine.inc"\n\nnamespace PacingDiag\n')
-        source = one(source, "        const auto q=Counter();", "        const auto q=Counter();\n        BinderCapture::OnFrame(q, flags);")
+        source = one(source, "        const auto q=Counter();", """        const auto q=Counter();
+        const bool wasObserving = BinderCapture::Observing();
+        BinderCapture::OnFrame(q, flags);
+        static unsigned previousFlags = ~0u;
+        const bool stateChanged = previousFlags != flags;
+        previousFlags = flags;""")
+        source = one(source, "        Record(Kind::FrameState,frame,q,q,",
+                     """        if (!BinderCapture::Enabled() || BinderCapture::Observing() || wasObserving || stateChanged)
+            Record(Kind::FrameState,frame,q,q,""")
         source = one(source, "        // Deep-only", """        if (BinderCapture::Frozen()) return;
-        if (BinderCapture::Enabled() && kind == Kind::OtherGameEvent && end - begin < s.frequency / 5000) return;
+        if (BinderCapture::Enabled())
+        {
+            if (kind != Kind::FrameState && !BinderCapture::Observing()) return;
+            if ((kind == Kind::OtherGameEvent || kind == Kind::BeginRender ||
+                kind == Kind::Discord || kind == Kind::Gamma || kind == Kind::SceneRender) &&
+                end - begin < s.frequency / 2000) return;
+        }
         // Deep-only""")
         source = one(source, "if(i>=State::capacity){s.dropped.fetch_add(1,std::memory_order_relaxed);return;}",
                      """if(i>=State::capacity){
@@ -110,11 +124,65 @@ def apply(root, checks):
             if (kind == Kind::Present) BinderCapture::OnPresent(begin, end);
             return;
         }""")
+        source = one(source, "if(((kind>=Kind::FrameMove",
+                     "if((!BinderCapture::Enabled() || (kind != Kind::TaskEnqueue && kind != Kind::GameTask)) && ((kind>=Kind::FrameMove")
         return one(source, '    }\n    void Flush() { if(Enabled())Data().Write(); }',
                    '''        if (kind == Kind::Present) BinderCapture::OnPresent(begin, end);
     }
     void Flush() { BinderCapture::Flush(); if(Enabled())Data().Write(); }''')
     change(src / "xrEngine/PacingDiagnostics.cpp", pacing)
+
+    def device(source):
+        source = one(source, "\t\tsecondary_tasks.run(&XRay::Engine::PreRenderThread);",
+                     """        {
+            PacingDiag::Span enqueue(PacingDiag::Kind::TaskEnqueue, false, 1);
+            secondary_tasks.run(&XRay::Engine::PreRenderThread);
+        }""")
+        source = one(source, "PacingDiag::Span pacingTaskEnqueue(PacingDiag::Kind::TaskEnqueue);",
+                     "PacingDiag::Span pacingTaskEnqueue(PacingDiag::Kind::TaskEnqueue, false, 2);")
+        return one(source, "PacingDiag::Span pacingWait(PacingDiag::Kind::WaitWorkers);",
+                   "PacingDiag::Span pacingWait(PacingDiag::Kind::WaitWorkers, false, 3);")
+    change(src / "xrEngine/device.cpp", device)
+
+    def workers(source):
+        source = one(source, "PacingDiag::Span pacingPre(PacingDiag::Kind::PreRender);",
+                     "PacingDiag::Span pacingPre(PacingDiag::Kind::PreRender, false, 1);")
+        return one(source, "PacingDiag::Span pacingGameTask(PacingDiag::Kind::GameTask);",
+                   "PacingDiag::Span pacingGameTask(PacingDiag::Kind::GameTask, false, 2);")
+    change(src / "xrEngine/EngineThreading.cpp", workers)
+
+    def luabind(source):
+        declaration = """#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+namespace {
+using IxTag = void (__cdecl*)(lua_State*, const char*, const char*, unsigned);
+IxTag BinderMethodTag()
+{
+    wchar_t flag[2]{};
+    if (GetEnvironmentVariableW(L"IXRAY_BINDER_CAPTURE", flag, 2) != 1 || flag[0] != L'1')
+        return nullptr;
+    const auto lua = GetModuleHandleW(L"lua51.dll");
+    return reinterpret_cast<IxTag>(GetProcAddress(lua, "xrBinderCaptureTagNative"));
+}
+}
+#endif
+
+"""
+        anchor = "int luabind::detail::class_rep::function_dispatcher(lua_State* L)"
+        source = one(source, anchor, declaration + anchor)
+        return one(source, "return o.call(L, force_static_call != 0);",
+                   """#ifdef _WIN32
+            static const auto binderMethodTag = BinderMethodTag();
+            if (binderMethodTag)
+                binderMethodTag(L, rep->crep->name(), rep->name, static_cast<unsigned>(match_index));
+#endif
+            return o.call(L, force_static_call != 0);""")
+    change(root / "build/x64/Engine-Windows/_deps/luabind-src/luabind/src/class_rep.cpp", luabind)
+
 
     def insert_header(source):
         return one(source, '#include "StdAfx.h"\n', '#include "StdAfx.h"\n#include "../xrEngine/BinderCapture.h"\n')

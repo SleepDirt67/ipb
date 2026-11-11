@@ -47,6 +47,14 @@ function Find-Installation($ProfileData, $Manifest) {
             }
         }
     }
+    foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        foreach ($property in @(Get-ChildItem -LiteralPath $key -ErrorAction SilentlyContinue | Get-ItemProperty)) {
+            if ($property.DisplayName -match 'S\.?T\.?A\.?L\.?K\.?E\.?R\.?[.: -]+Call of Pripyat' -and $property.InstallLocation) {
+                $roots += $property.InstallLocation
+            }
+        }
+    }
     $choices = @()
     foreach ($root in @($roots | Where-Object { $_ } | Select-Object -Unique)) {
         if (-not (Test-Path -LiteralPath (Join-Path $root 'fsgame.ltx') -PathType Leaf)) { continue }
@@ -78,7 +86,7 @@ function Find-Installation($ProfileData, $Manifest) {
 }
 
 function Check-BinderPackage($Manifest) {
-    if ($Manifest.binder_capture.schema -ne 3 -or
+    if ($Manifest.binder_capture.schema -ne 4 -or
         $Manifest.binder_capture.base -ne '886337084c8fd851a4fff186b453ae7cc6450821') {
         throw 'Unexpected diagnostic package.'
     }
@@ -217,6 +225,11 @@ function Stop-BinderRecording {
 try {
     if ([IO.File]::Exists($journalPath)) {
         $pending = Get-Content -LiteralPath $journalPath -Encoding UTF8 -Raw | ConvertFrom-Json
+        if ($pending.session -match '^IXRayBinder_[0-9a-f]{32}$') {
+            # A terminated launcher may leave system and PresentMon sessions running.
+            & $wpr -cancel -instancename $pending.session 2>$null | Out-Null
+            & $pm --session_name $pending.session --terminate_existing_session 2>$null | Out-Null
+        }
         $null = Restore-BinderTransaction $pending $journalPath $install.bin $install.save_directory
         Remove-Item -LiteralPath $txRoot -Recurse -Force
     } elseif (Test-Path -LiteralPath $txRoot) {
@@ -235,8 +248,15 @@ try {
     # Check real LuaJIT marks, QPC accounting, error recovery and allocator counters.
     & $probe *> (Join-Path $output 'runtime_preflight.txt')
     if ($LASTEXITCODE -ne 0) { throw "Diagnostic LuaJIT preflight failed ($LASTEXITCODE)." }
+    $calibration = & $probe --calibrate
+    if ($LASTEXITCODE -ne 0 -or @($calibration).Count -ne 9) { throw 'QPC calibration failed.' }
+    $calibration | Set-Content -LiteralPath (Join-Path $output 'observer_calibration.txt') -Encoding ASCII
     & $wpr -profiles $wprp *> (Join-Path $output 'wpr_profiles.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Windows rejected the CPU scheduling profile.' }
+    if ([IO.File]::Exists($savePath)) { throw 'Temporary save name collision.' }
+    $journal = New-BinderTransaction $install $manifest $txRoot $journalPath $savePath $profileData.save_sha256
+    $journal | Add-Member NoteProperty session $session
+    Write-BinderJournal $journal $journalPath
     & $wpr -start "$wprp!IXRayBinderCpu" -filemode -instancename $session *> (Join-Path $output 'wpr_start.txt')
     if ($LASTEXITCODE -ne 0) { throw 'CPU scheduling ETW session could not start.' }
     $wprStarted = $true
@@ -244,8 +264,6 @@ try {
     $stopEvent = [Threading.EventWaitHandle]::new($false, 'ManualReset', $stopEventName)
     $meta.startup_verified = $true
 
-    if ([IO.File]::Exists($savePath)) { throw 'Temporary save name collision.' }
-    $journal = New-BinderTransaction $install $manifest $txRoot $journalPath $savePath $profileData.save_sha256
     Set-BinderBinary $install.save $savePath $profileData.save_sha256
     foreach ($record in $journal.modules) {
         Set-BinderBinary (Join-Path $PSScriptRoot "bin/$($record.name)") (Join-Path $install.bin $record.name) $record.diagnostic_sha256
@@ -277,7 +295,11 @@ try {
     Write-BinderJournal $journal $journalPath
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while (-not $game.HasExited -and $timer.Elapsed.TotalSeconds -lt 55) {
-        if (Save-Modules $game $manifest $install.bin $output) { $meta.modules_verified = $true; break }
+        if (Save-Modules $game $manifest $install.bin $output) {
+            $meta.modules_verified = $true
+            $meta.module_snapshot_qpc = [Diagnostics.Stopwatch]::GetTimestamp()
+            break
+        }
         Start-Sleep -Milliseconds 400
     }
     if (-not $meta.modules_verified) { $issues.Add('The required game images did not load or could not be verified.') }

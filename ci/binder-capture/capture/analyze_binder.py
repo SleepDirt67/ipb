@@ -14,14 +14,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from analyze_capture import (cpu_overlap, cpu_schedule, cpu_window_available, engine,
                              join_presents, read_rows, segment_presents)
 
-HEADER = Struct("<8s5Q15I4x")
+HEADER = Struct("<8s5Q16I")
 EPISODE = Struct("<3Q6I")
 BINDER = Struct("<12Q14I")
 PHASES = Struct("<48Q")
 TALLY = Struct("<2Q2I")
-NATIVE = Struct("<3Q4I")
+NATIVE = Struct("<4Q4I")
+METHOD = Struct("<48s64sI")
 DISPATCH = Struct("<6Q8I96s")
-BINDER_SIZE = BINDER.size + PHASES.size + 16 * TALLY.size + 32 * NATIVE.size
+BINDER_SIZE = BINDER.size + PHASES.size + 16 * TALLY.size + 96 * NATIVE.size + 256
 CATEGORIES = ("host", "vm_and_internal", "external_c", "gc")
 KINDS = {1: "reinit", 2: "reload", 3: "net_spawn", 4: "load"}
 GC = (
@@ -49,11 +50,11 @@ def capture_data(path):
     with path.open("rb") as stream:
         header = labelled("magic frequency active_ticks observation_begin observation_end save_loaded "
                           "pid binders dispatches binder_dropped dispatch_dropped wrapper_installs wrapper_refused "
-                          "script_matches script_misses stop_reason strong large binder_size dispatch_size episodes",
+                          "script_matches script_misses stop_reason strong large binder_size dispatch_size episodes methods",
                           HEADER.unpack(stream.read(HEADER.size)))
-        if (header["magic"] != b"IXBIND3\0" or header["binder_size"] != BINDER_SIZE or
+        if (header["magic"] != b"IXBIND4\0" or header["binder_size"] != BINDER_SIZE or
                 header["dispatch_size"] != DISPATCH.size or not 0 < header["frequency"] or
-                not 0 <= header["episodes"] <= 9 or header["binders"] > 10800 or header["dispatches"] > 14400):
+                not 0 <= header["episodes"] <= 9 or header["binders"] > 4500 or header["dispatches"] > 14400 or header["methods"] > 512):
             raise ValueError("Invalid binder binary header")
         del header["magic"]
         episodes = [
@@ -71,7 +72,7 @@ def capture_data(path):
                            "heap_before heap_after frame tid vm_generation object generation kind flags "
                            "phase execution gc_stage gc_cycles marks address_count native_cursor",
                            BINDER.unpack_from(raw))
-            if row["address_count"] > 32 or row["kind"] not in KINDS or not 0 < row["begin"] <= row["end"]:
+            if row["address_count"] > 96 or row["kind"] not in KINDS or not 0 < row["begin"] <= row["end"]:
                 raise ValueError("Invalid binder record")
             row["phase_ticks"] = PHASES.unpack_from(raw, BINDER.size)
             offset = BINDER.size + PHASES.size
@@ -87,6 +88,13 @@ def capture_data(path):
                 raise ValueError("Invalid dispatch interval")
             row["section"] = row["section"].split(b"\0", 1)[0].decode("cp1251", errors="replace")
             dispatches.append(row)
+        header["native_methods"] = {}
+        for index in range(1, header["methods"] + 1):
+            owner, name, overload = METHOD.unpack(stream.read(METHOD.size))
+            header["native_methods"][index] = (
+                owner.split(b"\0", 1)[0].decode("utf-8", errors="replace"),
+                name.split(b"\0", 1)[0].decode("utf-8", errors="replace"), overload,
+            )
         if stream.read(1):
             raise ValueError("Trailing data in binder trace")
     return header, episodes, unique_rows(binders, "scope"), unique_rows(dispatches, "scope")
@@ -147,12 +155,15 @@ def export_scopes(directory, capture_id, header, binders, dispatches, tools):
         modules = [(int(row["base_hex"], 16), int(row["size"]), row["name"])
                    for row in read_rows(directory / "module_snapshot.csv")]
     for row in binders:
-        for address, ticks, longest, count, interrupted, phase, _ in row["native"]:
+        for address, inclusive, ticks, longest, count, interrupted, phase, method in row["native"]:
+            class_name, method_name, overload = header["native_methods"].get(method, ("", "", ""))
             mapping = next(((name, address - base) for base, size, name in modules if base <= address < base + size), None)
             sites.append({
                 **identity, "scope": row["scope"], "phase": phase, "address": f"0x{address:x}",
                 "module": mapping[0] if mapping else "", "rva": f"0x{mapping[1]:x}" if mapping else "",
-                "symbol": mapper.address(address, False)[0] if mapping else "", "exclusive_ticks": ticks,
+                "symbol": mapper.address(address, False)[0] if mapping else "",
+                "class_name": class_name, "method_name": method_name, "overload": overload,
+                "inclusive_c_wrapper_ticks": inclusive, "exclusive_ticks": ticks,
                 "max_exclusive_ticks": longest, "count": count, "nested_calls": interrupted,
             })
     write_csv(directory / "native_summary.csv", sites)
@@ -232,9 +243,17 @@ def verify_episodes(episodes, binders, dispatches, by_present, spans, joined, sc
                 gaps.append("CPU scheduling has an unresolved interval")
 
         categories = Counter()
+        phase_categories = defaultdict(Counter)
+        gc_stages = Counter()
         for row in binder:
             for i, value in enumerate(row["phase_ticks"]):
-                categories[CATEGORIES[i % 4]] += value
+                category = CATEGORIES[i % 4]
+                categories[category] += value
+                if value:
+                    phase_categories[i // 4][category] += value
+            for name, (ticks, _, _, _) in zip(GC, row.get("gc", ())):
+                if ticks:
+                    gc_stages[name] += ticks
         scale = 1000 / hz
         before = 0
         after = 0
@@ -265,6 +284,9 @@ def verify_episodes(episodes, binders, dispatches, by_present, spans, joined, sc
             "capture_copy_ms": ep["copy_ticks"] * scale, "root_stalkers": roots,
             "dispatches": len(dispatch), "strong": strong, "structural": roots >= 6,
             "binder_categories_ms": {name: value * scale for name, value in categories.items()},
+            "binder_phases_ms": {phase: {name: value * scale for name, value in values.items()}
+                                 for phase, values in phase_categories.items()},
+            "gc_stages_ms": {name: value * scale for name, value in gc_stages.items()},
             "cpu_ms": cpu, "invalid": list(dict.fromkeys(errors)), "unresolved": list(dict.fromkeys(gaps)),
         }
 
@@ -308,6 +330,21 @@ def assess(directory, tools, capture, quality):
                 header["observation_begin"] <= row[0] <= header["observation_end"]]
     joined, quality["presentmon"] = join_presents(directory / "presentmon.csv", pid, [p for p, _ in presents], hz)
     write_timeline(directory, presents, joined, hz)
+    # These two jobs share the task_group joined by the frame barrier.
+    jobs = defaultdict(dict)
+    for a, b, k, frame, tid, payload in spans:
+        if (k, payload) in ((5, 1), (22, 2), (27, 1), (27, 2), (4, 3)):
+            jobs[frame][k, payload] = a, b, tid
+    links = []
+    for frame, rows in sorted(jobs.items()):
+        for job_id, worker_kind in ((1, 5), (2, 22)):
+            submitted, worker, wait = rows.get((27, job_id)), rows.get((worker_kind, job_id)), rows.get((4, 3))
+            if submitted and worker and wait and submitted[0] <= worker[0] <= worker[1] <= wait[1]:
+                links.append({"frame": frame, "task": f"{frame}:{job_id}", "barrier": f"{frame}:3",
+                              "submit_qpc": submitted[0], "worker_begin": worker[0], "worker_end": worker[1],
+                              "worker_tid": worker[2], "wait_begin": wait[0], "wait_end": wait[1],
+                              "barrier_overlap_ticks": max(0, worker[1] - max(wait[0], worker[0]))})
+    write_csv(directory / "task_dependencies.csv", links)
     write_csv(directory / "task_timeline.csv", [
         {"qpc_begin": a, "qpc_end": b, "kind": k, "frame": frame, "tid": tid, "payload": payload}
         for a, b, k, frame, tid, payload in spans if k in (4, 22, 24, 25, 27, 41, 42, 43, 44)
@@ -341,6 +378,8 @@ def run(directory, tools):
         if manifest["commit"] != capture["commit"] or manifest["binder_capture"]["base"] != BASELINE:
             raise ValueError("Unexpected build identity")
         quality["episodes"] = assess(directory, tools, capture, quality)
+        instrument = json.loads((directory / "instrumentation_map.json").read_text(encoding="utf-8-sig"))
+        quality["phase_names"] = instrument["phases"]
     except (OSError, KeyError, ValueError, TypeError, ArithmeticError, RuntimeError) as exc:
         quality["invalid"].append(str(exc))
     except Exception as exc:
@@ -372,6 +411,26 @@ def run(directory, tools):
         lines.append("| {engine_frame} | {present_gap_ms:.3f} ms | {dispatch_ms:.3f} ms | {binder_ms:.3f} ms | "
                      "{remaining_if_all_binder_removed_ms:.3f} ms | {root_stalkers} |".format(**row))
     lines.extend(["", "The subtraction is an optimistic bound at the measured workload.", ""])
+    if targets:
+        first = targets[0]
+        lines.extend([
+            f"## Frame {first['engine_frame']}", "",
+            "| Script phase | Host | VM and other | External C | GC |",
+            "|---|---:|---:|---:|---:|",
+        ])
+        for number, values in sorted(first["binder_phases_ms"].items(), key=lambda x: -sum(x[1].values())):
+            names = quality.get("phase_names", ())
+            label = names[number] if number < len(names) else str(number)
+            times = " | ".join(f"{values.get(key, 0):.3f} ms" for key in CATEGORIES)
+            lines.append(f"| {label} | {times} |")
+        lines.append("")
+        cpu = first["cpu_ms"]
+        if cpu:
+            lines.append("Game thread scheduler time. " + ", ".join(f"{name} {value:.3f} ms" for name, value in cpu.items()) + ".")
+            lines.append("")
+        if first["remaining_if_all_binder_removed_ms"] >= 40:
+            lines.append("At the recorded workload, reaching a 40 ms frame requires time savings outside the binder as well.")
+            lines.append("")
     lines.extend(f"- {reason}" for reason in dict.fromkeys(quality["invalid"] + quality["unresolved"]))
     for row in targets:
         lines.extend(f"- Frame {row['engine_frame']}: {reason}" for reason in row["invalid"] + row["unresolved"])

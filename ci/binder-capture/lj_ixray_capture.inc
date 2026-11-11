@@ -1,6 +1,7 @@
 #include "lj_ixray_capture.h"
 #include "lj_bc.h"
 #include "luajit.h"
+#include <string.h>
 
 #if LJ_TARGET_WINDOWS
 #include <windows.h>
@@ -11,6 +12,17 @@
 IX_THREAD_LOCAL IxBinderRecord *ix_capture;
 static IX_THREAD_LOCAL uintptr_t ix_last_global;
 static IX_THREAD_LOCAL uint32_t ix_status[4];
+
+enum { IX_METHODS = 512, IX_METHOD_HASH = 1024 };
+typedef struct IxMethodKey {
+  const char *class_name, *method_name;
+  unsigned overload, generation;
+} IxMethodKey;
+static IX_THREAD_LOCAL IxMethodKey ix_method_keys[IX_METHODS];
+static IX_THREAD_LOCAL IxMethodInfo ix_method_info[IX_METHODS];
+static IX_THREAD_LOCAL uint16_t ix_method_hash[IX_METHOD_HASH];
+static IX_THREAD_LOCAL unsigned ix_method_count;
+
 
 uint64_t ix_capture_clock(void)
 {
@@ -122,37 +134,108 @@ void ix_capture_allocation(global_State *g, GCSize before, GCSize after)
   else record->released += before - after;
 }
 
+static IxNativeSite *ix_capture_site(IxBinderRecord *record, uintptr_t address, unsigned method)
+{
+  unsigned cell = (unsigned)((address >> 3) ^ (address >> 12) ^
+                             (record->phase * 37u) ^ (method * 61u)) & (IX_NATIVE_HASH - 1);
+  IxNativeSite *site;
+  while (record->native_hash[cell]) {
+    site = &record->native[record->native_hash[cell] - 1];
+    if (site->address == address && site->phase == record->phase && site->method == method)
+      return site;
+    cell = (cell + 1) & (IX_NATIVE_HASH - 1);
+  }
+  if (record->address_count == IX_NATIVE_SITES) {
+    record->flags |= IX_NATIVE_OVERFLOW;
+    return NULL;
+  }
+  site = &record->native[record->address_count++];
+  record->native_hash[cell] = (uint16_t)record->address_count;
+  site->address = address;
+  site->phase = record->phase;
+  site->method = method;
+  return site;
+}
+
+static void ix_copy_label(char *to, size_t size, const char *from)
+{
+  size_t length = strlen(from);
+  if (length >= size) length = size - 1;
+  memcpy(to, from, length);
+  to[length] = 0;
+}
+
+static unsigned ix_capture_method(const char *class_name, const char *method_name, unsigned overload)
+{
+  unsigned cell = (unsigned)(((uintptr_t)class_name >> 3) ^ ((uintptr_t)method_name >> 4) ^
+                              (overload * 23u)) & (IX_METHOD_HASH - 1);
+  while (ix_method_hash[cell]) {
+    unsigned id = ix_method_hash[cell];
+    const IxMethodKey *key = &ix_method_keys[id - 1];
+    if (key->class_name == class_name && key->method_name == method_name &&
+        key->overload == overload && key->generation == ix_capture->vm_generation)
+      return id;
+    cell = (cell + 1) & (IX_METHOD_HASH - 1);
+  }
+  if (ix_method_count == IX_METHODS) {
+    ix_capture->flags |= IX_NATIVE_OVERFLOW;
+    return 0;
+  }
+  ix_method_keys[ix_method_count].class_name = class_name;
+  ix_method_keys[ix_method_count].method_name = method_name;
+  ix_method_keys[ix_method_count].overload = overload;
+  ix_method_keys[ix_method_count].generation = ix_capture->vm_generation;
+  ix_copy_label(ix_method_info[ix_method_count].class_name,
+                sizeof(ix_method_info[ix_method_count].class_name), class_name);
+  ix_copy_label(ix_method_info[ix_method_count].method_name,
+                sizeof(ix_method_info[ix_method_count].method_name), method_name);
+  ix_method_info[ix_method_count].overload = overload;
+  ix_method_hash[cell] = (uint16_t)++ix_method_count;
+  return ix_method_count;
+}
+
+LUA_API void xrBinderCaptureTagNative(lua_State *L, const char *class_name,
+                                     const char *method_name, unsigned overload)
+{
+  IxBinderRecord *record = ix_capture;
+  IxNativeSite *site;
+  unsigned method;
+  if (!record || record->execution != IX_EXTERNAL || !record->native_cursor ||
+      record->global != (uintptr_t)G(L) || record->flags & IX_NONLOCAL_EXIT)
+    return;
+  method = ix_capture_method(class_name, method_name, overload);
+  if (!method) return;
+  ix_capture_account(record, ix_capture_clock());
+  site = ix_capture_site(record, record->native[record->native_cursor - 1].address, method);
+  record->native_cursor = site ? (unsigned)(site - record->native) + 1 : 0;
+  if (site) site->measure.count++;
+}
+
+LUA_API const IxMethodInfo *xrBinderCaptureMethods(unsigned *count)
+{
+  *count = ix_method_count;
+  return ix_method_info;
+}
+
 static int ix_capture_wrap(lua_State *L, lua_CFunction function)
 {
   IxBinderRecord *record = ix_capture;
-  IxNativeSite *site = NULL;
-  unsigned outer = record ? record->native_cursor : 0;
-  uintptr_t address = (uintptr_t)function;
-  uint64_t before = 0;
+  IxNativeSite *site;
+  unsigned outer;
+  uint64_t before = 0, started;
   int result, previous;
-  unsigned i;
   if (!record || record->flags & IX_NONLOCAL_EXIT) return function(L);
   if (record->global != (uintptr_t)G(L)) {
     record->flags |= IX_DIFFERENT_VM;
     return function(L);
   }
+  outer = record->native_cursor;
   previous = ix_capture_enter(IX_EXTERNAL);
-  for (i = 0; i < record->address_count; i++) {
-    if (record->native[i].address == address && record->native[i].phase == record->phase) {
-      site = &record->native[i];
-      break;
-    }
-  }
-  if (!site && record->address_count < IX_NATIVE_SITES) {
-    site = &record->native[record->address_count++];
-    site->address = address;
-    site->phase = record->phase;
-  }
+  started = record->last;
+  site = ix_capture_site(record, (uintptr_t)function, 0);
   if (site) {
     site->measure.count++;
     before = site->measure.ticks;
-  } else {
-    record->flags |= IX_NATIVE_OVERFLOW;
   }
   if (outer) record->native[outer - 1].measure.interrupted++;
   record->native_cursor = site ? (unsigned)(site - record->native) + 1 : 0;
@@ -160,8 +243,11 @@ static int ix_capture_wrap(lua_State *L, lua_CFunction function)
   if (!(record->flags & IX_NONLOCAL_EXIT)) {
     ix_capture_leave(previous);
     record->native_cursor = outer;
-    if (site && record->native_cursor != (unsigned)(site - record->native) + 1 && site->measure.ticks - before > site->measure.longest)
-      site->measure.longest = site->measure.ticks - before;
+    if (site) {
+      site->inclusive += record->last - started;
+      if (outer != (unsigned)(site - record->native) + 1 && site->measure.ticks - before > site->measure.longest)
+        site->measure.longest = site->measure.ticks - before;
+    }
   }
   return result;
 }

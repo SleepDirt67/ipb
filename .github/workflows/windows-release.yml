@@ -417,7 +417,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Packed view differential failed' }
 
       - name: Apply binder diagnostics to the sealed gameplay baseline
-        run: python ci/binder-capture/engine_overlay.py ixray checks/binder
+        shell: pwsh
+        run: |
+          python ci/binder-capture/engine_overlay.py ixray checks/binder
+          if ($LASTEXITCODE -ne 0) { throw 'Binder engine overlay failed' }
+          python ci/binder-capture/observer_overlay.py ixray ci/spawn-mainline/voice_replay.lua checks/binder/voice_probe.lua
+          if ($LASTEXITCODE -ne 0) { throw 'Binder observer replay overlay failed' }
 
       - name: Configure engine
         shell: pwsh
@@ -645,6 +650,19 @@ jobs:
             Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
           }
 
+      - name: Measure off, boundary-only and full collection on native voice replay
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $env:IXRAY_BINDER_CAPTURE = '1'
+          try {
+            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua checks/binder/voice_probe.lua --binder-observer 2>checks/BINDER_OBSERVER_STDERR.txt | Tee-Object checks/BINDER_OBSERVER_WINDOWS.txt
+            if ($LASTEXITCODE -ne 0) { throw 'Binder observer replay changed semantics or lost measurements' }
+          } finally { Remove-Item Env:IXRAY_BINDER_CAPTURE -ErrorAction SilentlyContinue }
+          if (@(Select-String -LiteralPath checks/BINDER_OBSERVER_WINDOWS.txt -Pattern '^OBSERVER ').Count -ne 2) {
+            throw 'Binder observer workloads were not measured'
+          }
+
       - name: Check sealed sources and package exact Release
         shell: pwsh
         timeout-minutes: 5
@@ -690,6 +708,31 @@ jobs:
           wpr.exe -profiles ci/binder-capture/capture/IXRayBinderCpu.wprp
           if ($LASTEXITCODE -ne 0) { throw 'Binder scheduling WPR profile schema rejected' }
           & ci/binder-capture/verify_transaction.ps1
+
+      - name: Record actual scheduling events and decode thread transitions
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $profile = (Resolve-Path ci/binder-capture/capture/IXRayBinderCpu.wprp).Path
+          $session = 'IXRayBinderQA_' + [guid]::NewGuid().ToString('N')
+          $etl = Join-Path (Resolve-Path checks).Path 'binder_schedule_fixture.etl'
+          wpr.exe -start "$profile!IXRayBinderCpu" -filemode -instancename $session
+          if ($LASTEXITCODE -ne 0) { throw 'Binder WPR session did not start' }
+          try {
+            $thread = & binder-checks/Release/binder_capture_runtime_test.exe --etw-witness
+            if ($LASTEXITCODE -ne 0 -or $thread -notmatch '^\d+$') { throw 'Scheduling witness did not run' }
+            wpr.exe -stop $etl 'IX-Ray scheduler witness' -skipPdbGen -instancename $session
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduling witness ETL could not be saved' }
+          } finally { wpr.exe -cancel -instancename $session 2>$null | Out-Null }
+          $result = & package/capture-tools/ixray_etw_decode.exe --extract $etl checks/BINDER_SCHEDULE_FIXTURE.csv "$thread"
+          if ($LASTEXITCODE -ne 0) { throw 'Actual scheduling ETW could not be decoded' }
+          $result | Set-Content checks/BINDER_ETW_WINDOWS.json
+          $meta = $result | ConvertFrom-Json
+          if ($meta.switch_events -lt 12 -or $meta.ready_events -lt 12 -or $meta.filtered_rows -lt 12 -or
+              $meta.events_lost -or $meta.buffers_lost -or $meta.unsupported_events) {
+            throw "Scheduling trace is incomplete: $result"
+          }
+          Remove-Item -LiteralPath $etl
 
       - name: Validate packaged Release install and rollback
         shell: pwsh

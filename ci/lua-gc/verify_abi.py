@@ -8,7 +8,10 @@ from verify_ixray_pe import PE
 stock, candidate = map(PE, sys.argv[1:3])
 allowed = set()
 if sys.argv[3:] == ["--binder-capture"]:
-    allowed = {"xrBinderCaptureContext", "xrBinderCaptureInstall", "xrBinderCaptureRegister", "xrBinderCaptureStatus"}
+    allowed = {
+        "xrBinderCaptureContext", "xrBinderCaptureInstall", "xrBinderCaptureRegister",
+        "xrBinderCaptureStatus", "xrBinderCaptureTagNative", "xrBinderCaptureMethods",
+    }
 assert stock.exports == {name: ordinal for name, ordinal in candidate.exports.items() if name not in allowed}
 assert set(candidate.exports) - set(stock.exports) == allowed
 assert stock.ordinals | {candidate.exports[name] for name in allowed} == candidate.ordinals

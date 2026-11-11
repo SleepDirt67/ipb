@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-enum { IX_PHASES = 12, IX_NATIVE_SITES = 32, IX_GC_STAGES = 16 };
+enum { IX_PHASES = 12, IX_NATIVE_SITES = 96, IX_GC_STAGES = 16, IX_NATIVE_HASH = 128 };
 enum IxExecution { IX_HOST, IX_VM, IX_EXTERNAL, IX_GC, IX_EXECUTION_COUNT };
 enum IxGcStage {
   IX_GC_ROOTS, IX_GC_PROPAGATE, IX_GC_ATOMIC, IX_GC_SWEEP_STRINGS,
@@ -22,9 +22,9 @@ typedef struct IxTally {
 } IxTally;
 
 typedef struct IxNativeSite {
-  uint64_t address;
+  uint64_t address, inclusive;
   IxTally measure;
-  uint32_t phase, reserved;
+  uint32_t phase, method;
 } IxNativeSite;
 
 typedef struct IxBinderRecord {
@@ -36,6 +36,7 @@ typedef struct IxBinderRecord {
   uint64_t ticks[IX_PHASES][IX_EXECUTION_COUNT];
   IxTally gc[IX_GC_STAGES];
   IxNativeSite native[IX_NATIVE_SITES];
+  uint16_t native_hash[IX_NATIVE_HASH];
 } IxBinderRecord;
 
 typedef struct IxDispatchRecord {
@@ -44,6 +45,11 @@ typedef struct IxDispatchRecord {
   uint32_t stalker, result;
   char section[96];
 } IxDispatchRecord;
+
+typedef struct IxMethodInfo {
+  char class_name[48], method_name[64];
+  uint32_t overload;
+} IxMethodInfo;
 
 typedef struct IxEpisodeRecord {
   uint64_t begin, end, copy_ticks;
@@ -55,6 +61,6 @@ typedef struct IxCaptureHeader {
   uint64_t frequency, active_ticks, observation_begin, observation_end, save_loaded;
   uint32_t pid, binders, dispatches, binder_dropped, dispatch_dropped;
   uint32_t wrapper_installs, wrapper_refused, script_matches, script_misses;
-  uint32_t stop_reason, strong, large, binder_size, dispatch_size, episodes;
+  uint32_t stop_reason, strong, large, binder_size, dispatch_size, episodes, methods;
 } IxCaptureHeader;
 #endif

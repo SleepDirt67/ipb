@@ -6,7 +6,7 @@ namespace BinderCapture
 {
     namespace
     {
-        constexpr unsigned binderLimit = 1200, dispatchLimit = 1600;
+        constexpr unsigned binderLimit = 500, dispatchLimit = 1600;
         constexpr unsigned firstSlots = 2, worstSlots = 4, controlSlots = 2, structuralSlots = 1;
         constexpr unsigned retainedSlots = firstSlots + worstSlots + controlSlots + structuralSlots;
 
@@ -45,6 +45,7 @@ namespace BinderCapture
 
         using Exchange = void* (__cdecl*)(lua_State*, void*);
         using Status = void (__cdecl*)(uint32_t*, int);
+        using Methods = const IxMethodInfo* (__cdecl*)(unsigned*);
         struct State
         {
             Frame working;
@@ -55,6 +56,7 @@ namespace BinderCapture
             HANDLE stopEvent = nullptr;
             Exchange exchange = nullptr;
             Status status = nullptr;
+            Methods methods = nullptr;
             std::wstring path;
             uint64_t next = 0, queue = 0, activeSince = 0, previousPresent = 0, previousState = 0;
             uint64_t nextControl = 0;
@@ -73,7 +75,7 @@ namespace BinderCapture
                     memset(frame.binders.data(), 0, sizeof(frame.binders));
                     memset(frame.dispatches.data(), 0, sizeof(frame.dispatches));
                 }
-                memcpy(header.magic, "IXBIND3", 8);
+                memcpy(header.magic, "IXBIND4", 8);
                 header.pid = GetCurrentProcessId();
                 LARGE_INTEGER f{};
                 QueryPerformanceFrequency(&f);
@@ -88,6 +90,7 @@ namespace BinderCapture
                 const auto lua = GetModuleHandleW(L"lua51.dll");
                 exchange = reinterpret_cast<Exchange>(GetProcAddress(lua, "xrBinderCaptureContext"));
                 status = reinterpret_cast<Status>(GetProcAddress(lua, "xrBinderCaptureStatus"));
+                methods = reinterpret_cast<Methods>(GetProcAddress(lua, "xrBinderCaptureMethods"));
             }
 
             ~State()
@@ -98,6 +101,7 @@ namespace BinderCapture
         };
         std::unique_ptr<State> state;
         std::atomic<bool> frozen{false};
+        std::atomic<bool> observing{false};
         bool Armed()
         {
             static const bool enabled = [] {
@@ -127,6 +131,7 @@ namespace BinderCapture
     bool Enabled() { return Armed(); }
 
     bool Frozen() { return frozen.load(std::memory_order_relaxed); }
+    bool Observing() { return observing.load(std::memory_order_relaxed); }
 
     void OnFrame(uint64_t qpc, unsigned flags)
     {
@@ -136,6 +141,7 @@ namespace BinderCapture
             state = std::unique_ptr<State>(new State{});
         auto& s = *state;
         const bool active = (flags & 31u) == 17u && s.header.save_loaded;
+        observing.store(active, std::memory_order_relaxed);
         if (!active)
         {
             s.activeSince = s.previousPresent = s.previousState = 0;
@@ -269,6 +275,7 @@ namespace BinderCapture
             s->header.dispatches += frame.dispatchCount;
             if (frame.rank) ++s->header.episodes;
         }
+        const auto* methods = s->methods ? s->methods(&s->header.methods) : nullptr;
         FILE* output = nullptr;
         if (_wfopen_s(&output, s->path.c_str(), L"wb") || !output)
             return;
@@ -287,6 +294,7 @@ namespace BinderCapture
             fwrite(frame.binders.data(), sizeof(IxBinderRecord), frame.binderCount, output);
         for (const auto& frame : s->retained)
             fwrite(frame.dispatches.data(), sizeof(IxDispatchRecord), frame.dispatchCount, output);
+        if (methods) fwrite(methods, sizeof(IxMethodInfo), s->header.methods, output);
         fclose(output);
     }
 

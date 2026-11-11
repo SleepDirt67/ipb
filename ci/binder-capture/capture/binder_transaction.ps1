@@ -4,7 +4,7 @@ function Write-BinderJournal($Journal, [string]$Path) {
     $data = [Text.UTF8Encoding]::new($false).GetBytes(($Journal | ConvertTo-Json -Depth 8))
     $stream = [IO.File]::Open($temporary, 'Create', 'Write', 'None')
     try { $stream.Write($data, 0, $data.Length); $stream.Flush($true) } finally { $stream.Dispose() }
-    if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, $null) }
+    if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [NullString]::Value) }
     else { [IO.File]::Move($temporary, $Path) }
 }
 
@@ -16,7 +16,7 @@ function Set-BinderBinary([string]$Source, [string]$Target, [string]$Digest) {
         try { $inputStream.CopyTo($out); $out.Flush($true) } finally { $out.Dispose() }
     } finally { $inputStream.Dispose() }
     if ((Hash $staged) -ne $Digest) { throw 'Staged file checksum mismatch.' }
-    if ([IO.File]::Exists($Target)) { [IO.File]::Replace($staged, $Target, $null) }
+    if ([IO.File]::Exists($Target)) { [IO.File]::Replace($staged, $Target, [NullString]::Value) }
     else { [IO.File]::Move($staged, $Target) }
     if ((Hash $Target) -ne $Digest) { throw 'Installed file checksum mismatch.' }
 }

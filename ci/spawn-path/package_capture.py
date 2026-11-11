@@ -48,6 +48,18 @@ for record in symbol_manifest["files"]:
     record["index_sha256"] = digest(index)
 (indices / "INDEX_MANIFEST.json").write_text(json.dumps(symbol_manifest, indent=2) + "\n")
 binary_manifest["capture_kind"] = "spawn-path-v1"
+binder = bundle.parent / "binder-capture"
+for file in (binder / "capture").iterdir():
+    if file.is_file():
+        shutil.copy2(file, package)
+shutil.copy2(checks / "binder/instrumentation_map.json", package)
+shutil.copy2(Path("binder-checks/Release/binder_capture_runtime_test.exe"), capture)
+shutil.copy2(package / "bin/lua51.dll", capture)
+binary_manifest["binder_capture"] = {
+    "schema": 3,
+    "base": "886337084c8fd851a4fff186b453ae7cc6450821",
+    "acceptance": "internal QA, target workload observer effect unverified",
+}
 binary_manifest_path.write_text(json.dumps(binary_manifest, indent=2) + "\n")
 files = sorted(path for path in package.rglob("*") if path.is_file() and path.name != "SHA256SUMS.txt")
 (package / "SHA256SUMS.txt").write_text(

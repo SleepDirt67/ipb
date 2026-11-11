@@ -5,12 +5,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from verify_ixray_pe import PE
 
-stock, candidate = map(PE, sys.argv[1:])
-assert stock.exports == candidate.exports, (
-    sorted(stock.exports.keys() - candidate.exports.keys()),
-    sorted(candidate.exports.keys() - stock.exports.keys()),
-    sorted(name for name in stock.exports.keys() & candidate.exports.keys()
-           if stock.exports[name] != candidate.exports[name]),
-)
-assert stock.ordinals == candidate.ordinals
-print(f"Matched {len(stock.exports)} named LuaJIT exports and {len(stock.ordinals)} ordinals")
+stock, candidate = map(PE, sys.argv[1:3])
+allowed = set()
+if sys.argv[3:] == ["--binder-capture"]:
+    allowed = {"xrBinderCaptureContext", "xrBinderCaptureInstall", "xrBinderCaptureRegister", "xrBinderCaptureStatus"}
+assert stock.exports == {name: ordinal for name, ordinal in candidate.exports.items() if name not in allowed}
+assert set(candidate.exports) - set(stock.exports) == allowed
+assert stock.ordinals | {candidate.exports[name] for name in allowed} == candidate.ordinals
+print(f"Matched {len(stock.exports)} existing LuaJIT exports and ordinals; {len(allowed)} diagnostic exports")

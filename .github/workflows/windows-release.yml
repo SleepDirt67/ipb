@@ -1,4 +1,4 @@
-name: IX-Ray Windows x64 live spawn and animation experiment
+name: IX-Ray Windows x64 binder capture
 on:
   push:
     branches: [main, 'experiment/**']
@@ -416,6 +416,9 @@ jobs:
           & checks/packed-view/Release/ixray_packed_view_check.exe | Tee-Object checks/PACKED_VIEW_WINDOWS.txt
           if ($LASTEXITCODE -ne 0) { throw 'Packed view differential failed' }
 
+      - name: Apply binder diagnostics to the sealed gameplay baseline
+        run: python ci/binder-capture/engine_overlay.py ixray checks/binder
+
       - name: Configure engine
         shell: pwsh
         working-directory: ixray
@@ -674,6 +677,20 @@ jobs:
           python -u ci/spawn-path/package_capture.py
           if ($LASTEXITCODE -ne 0) { throw 'Spawn path capture package failed' }
 
+      - name: Verify binder trace format, launcher and recovery
+        shell: pwsh
+        run: |
+          python ci/binder-capture/verify_analysis.py checks/binder_scopes.bin
+          if ($LASTEXITCODE -ne 0) { throw 'Binder trace analysis fixture failed' }
+          foreach ($script in Get-ChildItem ci/binder-capture/capture/*.ps1) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile($script.FullName,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { throw "Binder launcher parser errors: $errors" }
+          }
+          wpr.exe -profiles ci/binder-capture/capture/IXRayBinderCpu.wprp
+          if ($LASTEXITCODE -ne 0) { throw 'Binder scheduling WPR profile schema rejected' }
+          & ci/binder-capture/verify_transaction.ps1
+
       - name: Validate packaged Release install and rollback
         shell: pwsh
         timeout-minutes: 5
@@ -695,7 +712,7 @@ jobs:
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: IXRay-1.3.6-Prepared-Spawn-Experimental-Windows-x64
+          name: IXRay-1.3.6-BinderCapture-Internal-Windows-x64
           path: package/
           if-no-files-found: error
           retention-days: 14

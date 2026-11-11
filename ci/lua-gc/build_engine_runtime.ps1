@@ -28,6 +28,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Lua GC replay compile failed' }
 $tablePatch = (Resolve-Path ci/lua-gc/table-sweep.patch).Path
 git -C luajit apply $tablePatch
 if ($LASTEXITCODE -ne 0) { throw 'Dense table sweep patch rejected' }
+python ci/binder-capture/lua_overlay.py luajit
+if ($LASTEXITCODE -ne 0) { throw 'LuaJIT binder instrumentation overlay rejected' }
 # The generated VM embeds GCState offsets. Generate it in a fresh tree.
 cmake -S luajit -B gc-build -A x64 -DLUAJIT_TARGET_ARCH=x64 -DLUAJIT_ENABLE_APPLICATION=ON
 if ($LASTEXITCODE -ne 0) { throw 'Candidate LuaJIT configure failed' }
@@ -67,13 +69,30 @@ $original = (Get-FileHash -LiteralPath $runtime -Algorithm SHA256).Hash.ToLowerI
 if ($original -ne $expected) { throw 'Original Lua runtime mismatch' }
 $candidate = (Resolve-Path gc-build/bin/Release/lua51.dll).Path
 $symbols = (Resolve-Path gc-build/bin/Release/lua51.pdb).Path
-python ci/lua-gc/verify_abi.py $runtime $candidate
+python ci/lua-gc/verify_abi.py $runtime $candidate --binder-capture
 if ($LASTEXITCODE -ne 0) { throw 'Rebuilt runtime changed the public Lua ABI' }
+cmake -S ci/binder-capture -B binder-checks -A x64 "-DLUA_HEADERS=$headers" "-DLUA_IMPORT=$import"
+if ($LASTEXITCODE -ne 0) { throw 'Binder probe configure failed' }
+cmake --build binder-checks --config Release --parallel 4
+if ($LASTEXITCODE -ne 0) { throw 'Binder probe compile failed' }
+Copy-Item -LiteralPath $candidate -Destination binder-checks/Release/lua51.dll
+& binder-checks/Release/binder_capture_runtime_test.exe | Tee-Object checks/BINDER_LUA_WINDOWS.txt
+if ($LASTEXITCODE -ne 0) { throw 'Actual Windows binder runtime probe failed' }
+$env:IXRAY_BINDER_CAPTURE = '1'
+$env:IXRAY_BINDER_SAVE_ALIAS = 'fixture'
+$env:IXRAY_PACING_DIR = (Resolve-Path checks).Path
+try {
+    & binder-checks/Release/binder_capture_engine_test.exe | Tee-Object checks/BINDER_ENGINE_WINDOWS.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Binder retention fixture failed' }
+} finally {
+    Remove-Item Env:IXRAY_BINDER_CAPTURE,Env:IXRAY_BINDER_SAVE_ALIAS,Env:IXRAY_PACING_DIR -ErrorAction SilentlyContinue
+}
 $identity = [ordered]@{
     upstream_commit = $upstream
     recipe_commit = $recipe
     patch_sha256 = (Get-FileHash -LiteralPath $indexPatch -Algorithm SHA256).Hash.ToLowerInvariant()
     table_sweep_patch_sha256 = (Get-FileHash -LiteralPath $tablePatch -Algorithm SHA256).Hash.ToLowerInvariant()
+    binder_capture_overlay_sha256 = (Get-FileHash ci/binder-capture/lua_overlay.py -Algorithm SHA256).Hash.ToLowerInvariant()
     stock_dll_sha256 = $original
     candidate_dll_sha256 = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
     candidate_pdb_sha256 = (Get-FileHash -LiteralPath $symbols -Algorithm SHA256).Hash.ToLowerInvariant()

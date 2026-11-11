@@ -589,6 +589,9 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File experiments/audit-136/tests/test_installer.ps1 | Tee-Object checks/installer_audit.txt
           if ($LASTEXITCODE -ne 0) { throw 'Installer roundtrip test failed' }
 
+      - name: Restore localized names on existing mutant loot cards
+        run: python ci/ui-repair/apply.py ixray
+
       - name: Seal transformed engine sources
         run: python ci/engine_inputs.py --seal
 
@@ -691,6 +694,16 @@ jobs:
             throw "Windows install/rollback verification returned: $qaResult"
           }
           Write-Host $qaResult
+
+      - name: Assemble UI repair from the validated game DLL and pinned UI assets
+        run: python ci/ui-repair/apply.py ixray --package ui-repair
+
+      - name: Upload validated UI repair
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: IXRay-1.3.6-UI-repair-8863370-x64
+          path: ui-repair/
+          if-no-files-found: error
 
       - name: Upload tested full Release
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

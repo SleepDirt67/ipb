@@ -1,0 +1,72 @@
+name: UI repair installer QA
+on:
+  push:
+    branches: ['qa/ui-repair-installer-136']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  install:
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          github-token: ${{ github.token }}
+          run-id: 42807608533
+          name: IXRay-1.3.6-Prepared-Spawn-Experimental-Windows-x64
+          path: old-package
+      - name: Verify installer on the exact original module and check rejection
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'IX-Ray UI Test'
+          $payload = Join-Path $fixture 'ixray-ui-repair-payload'
+          New-Item -ItemType Directory -Path (Join-Path $fixture 'bin'), (Join-Path $payload 'bin') -Force | Out-Null
+          Copy-Item -LiteralPath 'ci/ui-repair/install-ixray-ui.ps1' -Destination $fixture
+          Copy-Item -LiteralPath 'old-package/bin/xrGame.dll' -Destination (Join-Path $fixture 'bin/xrGame.dll')
+          New-Item -ItemType File -Path (Join-Path $fixture 'fsgame.ltx'), (Join-Path $fixture 'bin/xrEngine.exe') | Out-Null
+          $dll = Join-Path $fixture 'bin/xrGame.dll'
+          $before = (Get-FileHash -LiteralPath $dll).Hash
+          $paths = @(
+              'bin/xrGame.dll',
+              'gamedata/configs/text/rus/ui_st_ixray_loot_monsters.xml',
+              'gamedata/textures/ui/ui_flags.dds',
+              'gamedata/textures/ui/ui_ix-ray_team_logo.dds',
+              'gamedata/textures/ui/ui_ixray_ex.dds',
+              'gamedata/textures/ui/ui_ixray_mutant_portrets.dds'
+          )
+          $hashes = @{}
+          foreach ($path in $paths) {
+              $target = Join-Path $payload $path
+              New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+              [IO.File]::WriteAllText($target, $path)
+              $hashes[$path] = (Get-FileHash -LiteralPath $target).Hash.ToLowerInvariant()
+          }
+          $texture = Join-Path $fixture 'gamedata/textures/ui/ui_flags.dds'
+          New-Item -ItemType Directory -Path (Split-Path -Parent $texture) -Force | Out-Null
+          [IO.File]::WriteAllText($texture, 'custom texture already present')
+          @{files=$hashes} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $payload 'manifest.json') -Encoding UTF8
+          & (Join-Path $fixture 'install-ixray-ui.ps1')
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne $hashes['bin/xrGame.dll']) { throw 'Wrong installed module' }
+          if ((Get-FileHash -LiteralPath "$dll.before-ui-repair.bak").Hash -ne $before) { throw 'Original module backup changed' }
+          if ([IO.File]::ReadAllText($texture) -ne 'custom texture already present') { throw 'Custom texture overwritten' }
+          foreach ($path in $paths | Where-Object { $_ -notlike '*ui_flags.dds' }) {
+              if ((Get-FileHash -LiteralPath (Join-Path $fixture $path)).Hash -ne $hashes[$path]) {
+                  throw "Wrong installed file $path"
+              }
+          }
+          & (Join-Path $fixture 'install-ixray-ui.ps1')
+          [IO.File]::WriteAllText($dll, 'foreign build')
+          $resource = Join-Path $fixture 'gamedata/textures/ui/ui_ixray_ex.dds'
+          Remove-Item -LiteralPath $resource
+          $rejected = $false
+          try { & (Join-Path $fixture 'install-ixray-ui.ps1') } catch {
+              if ($_.Exception.Message -notlike 'Unsupported xrGame.dll SHA-256*') { throw }
+              $rejected = $true
+          }
+          if (!$rejected -or [IO.File]::ReadAllText($dll) -ne 'foreign build' -or (Test-Path -LiteralPath $resource)) {
+              throw 'Unsupported installation was modified'
+          }
+          Write-Host 'PASS exact base install, backup, custom texture, idempotence, and foreign DLL rejection.'

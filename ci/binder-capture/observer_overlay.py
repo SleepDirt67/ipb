@@ -38,7 +38,8 @@ def apply(engine, input_script, output):
             {
                 Result witness;
                 std::vector<double> measured[4];
-                for (unsigned repeat = 0; repeat != 5; ++repeat)
+                constexpr unsigned repeats = 21;
+                for (unsigned repeat = 0; repeat != repeats; ++repeat)
                     for (unsigned step = 0; step != 4; ++step)
                     {
                         const unsigned variant = (step + trial + repeat) % 4;
@@ -61,7 +62,7 @@ def apply(engine, input_script, output):
                 for (unsigned variant = 0; variant != 4; ++variant)
                 {
                     std::sort(measured[variant].begin(), measured[variant].end());
-                    times[variant] = measured[variant][2];
+                    times[variant] = measured[variant][repeats / 2];
                 }
                 if (trial)
                 {

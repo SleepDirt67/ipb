@@ -94,7 +94,7 @@ def apply(root, checks):
         "base": "886337084c8fd851a4fff186b453ae7cc6450821",
         "stock_motivator_sha256": SCRIPT_SHA256, "normalized_sha256": hashlib.sha256(stock).hexdigest(),
         "instrumented_sha256": hashlib.sha256(marked).hexdigest(), "phases": PHASES,
-        "native": "First occupied slot per phase and one call per 64 thereafter. Untimed C, JIT fast functions, FFI and VM internals remain in the residual.",
+        "native": "First occupied slot and one call per 64 in selected phases. Voice/anomaly and idle VM bypass the C wrapper. Untimed C, JIT fast functions, FFI and VM internals remain in the residual.",
     }, indent=2) + "\n", encoding="utf-8")
     (checks / "motivator_probe.lua").write_bytes(marked)
 
@@ -160,13 +160,17 @@ def apply(root, checks):
 
 namespace {
 using IxTag = void (__cdecl*)(lua_State*, const char*, const char*, unsigned);
-IxTag BinderMethodTag()
+using IxGate = const volatile uint32_t* (__cdecl*)();
+struct IxTagHook { IxTag tag; const volatile uint32_t* gate; };
+IxTagHook BinderMethodTag()
 {
     wchar_t flag[2]{};
     if (GetEnvironmentVariableW(L"IXRAY_BINDER_CAPTURE", flag, 2) != 1 || flag[0] != L'1')
-        return nullptr;
+        return {};
     const auto lua = GetModuleHandleW(L"lua51.dll");
-    return reinterpret_cast<IxTag>(GetProcAddress(lua, "xrBinderCaptureTagNative"));
+    const auto tag = reinterpret_cast<IxTag>(GetProcAddress(lua, "xrBinderCaptureTagNative"));
+    const auto gate = reinterpret_cast<IxGate>(GetProcAddress(lua, "xrBinderCaptureTagGate"));
+    return {tag, gate ? gate() : nullptr};
 }
 }
 #endif
@@ -177,8 +181,8 @@ IxTag BinderMethodTag()
         return one(source, "return o.call(L, force_static_call != 0);",
                    """#ifdef _WIN32
             static const auto binderMethodTag = BinderMethodTag();
-            if (binderMethodTag)
-                binderMethodTag(L, rep->crep->name(), rep->name, static_cast<unsigned>(match_index));
+            if (binderMethodTag.gate && *binderMethodTag.gate && binderMethodTag.tag)
+                binderMethodTag.tag(L, rep->crep->name(), rep->name, static_cast<unsigned>(match_index));
 #endif
             return o.call(L, force_static_call != 0);""")
     change(root / "build/x64/Engine-Windows/_deps/luabind-src/luabind/src/class_rep.cpp", luabind)

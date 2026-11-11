@@ -34,7 +34,7 @@ typedef struct IxBinderRecord {
   uint32_t frame, tid, vm_generation, object, generation, kind, flags;
   uint32_t phase, execution, gc_stage, gc_cycles, marks, address_count;
   uint32_t native_cursor, native_seen, native_sampled, qpc_queries;
-  uint32_t reserved;
+  uint32_t native_untimed_phases;
   uint64_t ticks[IX_PHASES][IX_EXECUTION_COUNT];
   IxTally gc[IX_GC_STAGES];
   IxNativeSite native[IX_NATIVE_SITES];

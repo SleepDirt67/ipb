@@ -22,6 +22,12 @@ static IX_THREAD_LOCAL IxMethodKey ix_method_keys[IX_METHODS];
 static IX_THREAD_LOCAL IxMethodInfo ix_method_info[IX_METHODS];
 static IX_THREAD_LOCAL uint16_t ix_method_hash[IX_METHOD_HASH];
 static IX_THREAD_LOCAL unsigned ix_method_count;
+static volatile uint32_t ix_tag_gate;
+
+LUA_API const volatile uint32_t *xrBinderCaptureTagGate(void)
+{
+  return &ix_tag_gate;
+}
 
 
 uint64_t ix_capture_clock(void)
@@ -123,6 +129,7 @@ void ix_capture_bad_exit(lua_State *L)
     ix_capture->flags |= IX_NONLOCAL_EXIT;
     ix_capture->execution = IX_HOST;
     ix_capture->native_cursor = 0;
+    ix_tag_gate = 0;
   }
 }
 
@@ -241,8 +248,12 @@ static int ix_capture_wrap(lua_State *L, lua_CFunction function)
          method must not replace its sampled caller's Luabind identity. */
       if (!outer) return function(L);
       record->native_cursor = 0;
+      ix_tag_gate = 0;
       result = function(L);
-      if (!(record->flags & IX_NONLOCAL_EXIT)) record->native_cursor = outer;
+      if (!(record->flags & IX_NONLOCAL_EXIT)) {
+        record->native_cursor = outer;
+        ix_tag_gate = 1;
+      }
       return result;
     }
     record->first_functions[slot] = (uintptr_t)function;
@@ -257,10 +268,12 @@ static int ix_capture_wrap(lua_State *L, lua_CFunction function)
   }
   if (outer) record->native[outer - 1].measure.interrupted++;
   record->native_cursor = site ? (unsigned)(site - record->native) + 1 : 0;
+  ix_tag_gate = record->native_cursor != 0;
   result = function(L);
   if (!(record->flags & IX_NONLOCAL_EXIT)) {
     ix_capture_leave(previous);
     record->native_cursor = outer;
+    ix_tag_gate = outer != 0;
     if (site) {
       site->inclusive += record->last - started;
       if (outer != (unsigned)(site - record->native) + 1 && site->measure.ticks - before > site->measure.longest)
@@ -285,6 +298,7 @@ LUA_API int xrBinderCaptureInstall(lua_State *L)
     if (result) {
       ix_last_global = (uintptr_t)g;
       ix_status[0]++;
+      g->bc_cfunc_ext = BCINS_AD(BC_FUNCC, 0, 0);
     } else {
       ix_status[1]++;
     }
@@ -303,6 +317,7 @@ LUA_API void *xrBinderCaptureContext(lua_State *L, void *context)
     if (previous->global == (uintptr_t)G(L)) previous->heap_after = G(L)->gc.total;
   }
   ix_capture = next;
+  ix_tag_gate = next && next->native_cursor;
   if (next) {
     if (!next->global) {
       next->global = (uintptr_t)G(L);
@@ -318,6 +333,8 @@ LUA_API void *xrBinderCaptureContext(lua_State *L, void *context)
     if (!previous) next->qpc_queries++;
   }
   if (previous) previous->end = now;
+  if (G(L)->wrapf == (lua_CFunction)ix_capture_wrap)
+    G(L)->bc_cfunc_ext = BCINS_AD(next && next->phase != 8 ? BC_FUNCCW : BC_FUNCC, 0, 0);
   return previous;
 }
 
@@ -332,6 +349,9 @@ static int ix_capture_mark(lua_State *L)
     if (record->phase != (unsigned)phase)
       memset(record->first_functions, 0, sizeof(record->first_functions));
     record->phase = (unsigned)phase;
+    if (phase == 8) record->native_untimed_phases |= 1u << phase;
+    if (G(L)->wrapf == (lua_CFunction)ix_capture_wrap)
+      G(L)->bc_cfunc_ext = BCINS_AD(phase == 8 ? BC_FUNCC : BC_FUNCCW, 0, 0);
     record->marks |= 1u << phase;
   }
   return 0;

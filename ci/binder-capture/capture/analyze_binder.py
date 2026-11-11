@@ -70,7 +70,7 @@ def capture_data(path):
             raw = stream.read(BINDER_SIZE)
             row = labelled("begin end scope parent_scope dispatch last global allocated released allocation_calls "
                            "heap_before heap_after frame tid vm_generation object generation kind flags "
-                           "phase execution gc_stage gc_cycles marks address_count native_cursor native_seen native_sampled qpc_queries reserved",
+                           "phase execution gc_stage gc_cycles marks address_count native_cursor native_seen native_sampled qpc_queries native_untimed_phases",
                            BINDER.unpack_from(raw))
             if row["address_count"] > 96 or row["kind"] not in KINDS or not 0 < row["begin"] <= row["end"]:
                 raise ValueError("Invalid binder record")
@@ -140,7 +140,7 @@ def hash_file(path):
 def export_scopes(directory, capture_id, header, binders, dispatches, tools):
     identity = {"capture_id": capture_id, "pid": header["pid"]}
     keep = ("begin", "end", "scope", "parent_scope", "dispatch", "frame", "tid", "vm_generation",
-            "object", "generation", "kind", "flags", "marks", "native_seen", "native_sampled", "qpc_queries")
+            "object", "generation", "kind", "flags", "marks", "native_seen", "native_sampled", "qpc_queries", "native_untimed_phases")
     write_csv(directory / "binder_scopes.csv", [
         {**identity, **{key: row[key] for key in keep}} for row in binders
     ])
@@ -418,7 +418,7 @@ def run(directory, tools):
         first = targets[0]
         lines.extend([
             f"## Frame {first['engine_frame']}", "",
-            f"Timed {first['native_calls_timed']} of {first['native_calls']} external C calls.",
+            f"Timed {first['native_calls_timed']} of {first['native_calls']} external C calls seen in the wrapped phases.",
             "The unmeasured C calls remain in VM and other. Timed C intervals are a lower bound.", "",
             "| Script phase | Host | VM and other | Timed external C | GC |",
             "|---|---:|---:|---:|---:|",

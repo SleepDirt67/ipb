@@ -27,6 +27,9 @@ def apply(engine, input_script, output):
         Require(std::string_view(argv[5]) == "--binder-observer", "observer argument");
         using namespace ObserverReplay;
         Require(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0, "observer thread priority");
+        DWORD_PTR allowed = 0, system = 0;
+        if (GetProcessAffinityMask(GetCurrentProcess(), &allowed, &system) && allowed)
+            SetThreadAffinityMask(GetCurrentThread(), allowed & (~allowed + 1));
         for (const auto* workload : {"binder_545", "binder_569"})
         {
             std::vector<double> fullDelta, boundaryDelta, offDelta;

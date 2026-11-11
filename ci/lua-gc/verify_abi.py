@@ -10,7 +10,7 @@ allowed = set()
 if sys.argv[3:] == ["--binder-capture"]:
     allowed = {
         "xrBinderCaptureContext", "xrBinderCaptureInstall", "xrBinderCaptureRegister",
-        "xrBinderCaptureStatus", "xrBinderCaptureTagNative", "xrBinderCaptureMethods",
+        "xrBinderCaptureStatus", "xrBinderCaptureTagNative", "xrBinderCaptureMethods", "xrBinderCaptureTagGate",
     }
 assert stock.exports == {name: ordinal for name, ordinal in candidate.exports.items() if name not in allowed}
 assert set(candidate.exports) - set(stock.exports) == allowed

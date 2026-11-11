@@ -36,27 +36,33 @@ def apply(engine, input_script, output):
             uint64_t observedCalls = 0, timedCalls = 0;
             for (unsigned trial = 0; trial != 21; ++trial)
             {
-                Result states[4];
+                Result witness;
+                std::vector<double> measured[4];
+                for (unsigned repeat = 0; repeat != 5; ++repeat)
+                    for (unsigned step = 0; step != 4; ++step)
+                    {
+                        const unsigned variant = (step + trial + repeat) % 4;
+                        mode = static_cast<Mode>(variant);
+                        const auto state = Replay(argv[3], argv[4], workload);
+                        measured[variant].push_back(Milliseconds());
+                        Require(completed == 10, "observer NPC count");
+                        Require(state.added == (std::string_view(workload) == "binder_545" ? 5450 : 5690),
+                            "observer registration count");
+                        if (repeat == 0 && step == 0) witness = state;
+                        else Require(state.state == witness.state && state.added == witness.added &&
+                            state.applied == witness.applied, "observer changed replay state or effects");
+                        for (const auto& window : windows)
+                            std::printf("OBSERVER_SAMPLE %s %u %u %u %lu %llu %llu\n", workload, trial, repeat, variant,
+                                GetCurrentThreadId(), static_cast<unsigned long long>(window.begin),
+                                static_cast<unsigned long long>(window.end));
+                        if (mode == Full) { observedCalls = calls; timedCalls = timed; }
+                    }
                 double times[4]{};
-                for (unsigned step = 0; step != 4; ++step)
+                for (unsigned variant = 0; variant != 4; ++variant)
                 {
-                    const unsigned variant = (step + trial) % 4;
-                    mode = static_cast<Mode>(variant);
-                    states[variant] = Replay(argv[3], argv[4], workload);
-                    times[variant] = Milliseconds();
-                    Require(completed == 10, "observer NPC count");
-                    for (const auto& window : windows)
-                        std::printf("OBSERVER_SAMPLE %s %u %u %lu %llu %llu\n", workload, trial, variant,
-                            GetCurrentThreadId(), static_cast<unsigned long long>(window.begin),
-                            static_cast<unsigned long long>(window.end));
-                    if (mode == Full) { observedCalls = calls; timedCalls = timed; }
+                    std::sort(measured[variant].begin(), measured[variant].end());
+                    times[variant] = measured[variant][2];
                 }
-                for (unsigned variant = 1; variant != 4; ++variant)
-                    Require(states[variant].state == states[0].state &&
-                        states[variant].added == states[0].added && states[variant].applied == states[0].applied,
-                        "observer changed replay state or effects");
-                Require(states[0].added == (std::string_view(workload) == "binder_545" ? 5450 : 5690),
-                    "observer registration count");
                 if (trial)
                 {
                     boundaryDelta.push_back(times[1] - times[0]);

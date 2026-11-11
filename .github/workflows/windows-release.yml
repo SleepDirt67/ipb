@@ -600,7 +600,7 @@ jobs:
             wpr.exe -cancel -instancename $session 2>$null | Out-Null
           }
           python ci/binder-capture/observer_assess.py checks/BINDER_OBSERVER_WINDOWS.txt $trace checks/spawn-path/Release/ixray_etw_decode.exe checks/BINDER_OBSERVER.json ([Diagnostics.Stopwatch]::Frequency)
-          if ($LASTEXITCODE -ne 0) { throw 'Binder instrumentation exceeded the observer bound or the A/A control was inconclusive' }
+          if ($LASTEXITCODE -ne 0) { throw 'Binder observer replay exceeds the bound or repeated controls do not resolve it' }
           Remove-Item -LiteralPath $etl
 
       - name: Run actual-source audit differential tests

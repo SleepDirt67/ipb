@@ -1,0 +1,93 @@
+name: IX-Ray binder launcher and scheduler smoke
+on:
+  push:
+    branches: ['qa/binder-launcher-136']
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Exercise interrupted rollback in Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Path checks,package,package/bin -Force | Out-Null
+          Copy-Item experiments/stall-work-136/installation_common.ps1 package
+          [IO.File]::WriteAllText("$PWD\package\bin\xrGame.dll", 'new game bytes')
+          [IO.File]::WriteAllText("$PWD\package\bin\lua51.dll", 'new Lua bytes')
+          foreach ($file in Get-ChildItem ci/binder-capture/capture/*.ps1) {
+            $tokens=$null; $errors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$errors) | Out-Null
+            if ($errors.Count) { throw "$errors" }
+          }
+          & ci/binder-capture/verify_transaction.ps1
+      - name: Validate real WPR scheduling data
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          cmake_minimum_required(VERSION 3.21)
+          project(Witness LANGUAGES CXX)
+          add_executable(etw_decode ../ci/spawn-path/capture/etw_decode.cpp)
+          target_compile_features(etw_decode PRIVATE cxx_std_17)
+          target_link_libraries(etw_decode PRIVATE advapi32)
+          '@ | Set-Content checks/CMakeLists.txt
+          cmake -S checks -B checks/build -A x64
+          if ($LASTEXITCODE -ne 0) { throw 'Witness configure failed' }
+          cmake --build checks/build --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'Witness compile failed' }
+          Add-Type @'
+          using System;
+          using System.Diagnostics;
+          using System.Runtime.InteropServices;
+          using System.Threading;
+          public static class BinderWitness {
+            [DllImport("kernel32.dll")] static extern int GetCurrentThreadId();
+            public static int Run() {
+              using (var wake = new AutoResetEvent(false))
+              using (var done = new AutoResetEvent(false)) {
+                var t = new Thread(() => {
+                  for (var i = 0; i < 12; i++) {
+                    if (!wake.WaitOne(3000)) return;
+                    done.Set();
+                  }
+                });
+                t.Start();
+                for (var i = 0; i < 12; i++) {
+                  Thread.Sleep(8);
+                  wake.Set();
+                  if (!done.WaitOne(3000)) throw new Exception("witness wait timeout");
+                }
+                t.Join();
+                var clock = Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 50) Thread.SpinWait(10);
+                return GetCurrentThreadId();
+              }
+            }
+          }
+          '@
+          $profile = (Resolve-Path ci/binder-capture/capture/IXRayBinderCpu.wprp).Path
+          $session = 'IXRayBinderQA_' + [guid]::NewGuid().ToString('N')
+          $etl = "$PWD\checks\binder.etl"
+          wpr.exe -start "$profile!IXRayBinderCpu" -filemode -instancename $session
+          if ($LASTEXITCODE -ne 0) { throw 'Binder WPR session did not start' }
+          try {
+            $tid = [BinderWitness]::Run()
+            wpr.exe -stop $etl 'IX-Ray scheduler witness' -skipPdbGen -instancename $session
+            if ($LASTEXITCODE -ne 0) { throw 'Scheduler witness could not be saved' }
+          } finally {
+            wpr.exe -cancel -instancename $session 2>$null | Out-Null
+          }
+          $result = & checks/build/Release/etw_decode.exe --extract $etl checks/schedule.csv "$tid"
+          if ($LASTEXITCODE -ne 0) { throw 'ETW decoder rejected the scheduling trace' }
+          $result
+          $meta = $result | ConvertFrom-Json
+          if ($meta.switch_events -lt 12 -or $meta.ready_events -lt 12 -or $meta.filtered_rows -lt 12 -or
+              $meta.events_lost -or $meta.buffers_lost -or $meta.unsupported_events) {
+            throw "Scheduling trace is incomplete: $result"
+          }

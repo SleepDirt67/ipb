@@ -8,11 +8,12 @@
 #include "lj_gc.h"
 
 static unsigned finalized, last_finalized;
+static int closing;
 
 static int finalize_tag(lua_State *L)
 {
     unsigned tag = *(unsigned *)lua_touserdata(L, 1);
-    if (tag >= last_finalized || tag % 4 == 0)
+    if (tag >= last_finalized || (closing ? tag % 4 != 0 : tag % 4 == 0))
         abort();
     last_finalized = tag;
     ++finalized;
@@ -62,7 +63,11 @@ int main(int argc, char **argv)
     if (atomic_step <= 0 || finalized != count - count / 4)
         abort();
     printf("%u %.6f %u\n", count, atomic_step, finalized);
+    closing = 1;
+    last_finalized = count + 1;
     lua_pop(L, 2);
     lua_close(L);
+    if (finalized != count)
+        abort();
     return 0;
 }

@@ -86,7 +86,7 @@ function Find-Installation($ProfileData, $Manifest) {
 }
 
 function Check-BinderPackage($Manifest) {
-    if ($Manifest.binder_capture.schema -ne 4 -or
+    if ($Manifest.binder_capture.schema -ne 5 -or
         $Manifest.binder_capture.base -ne '886337084c8fd851a4fff186b453ae7cc6450821') {
         throw 'Unexpected diagnostic package.'
     }
@@ -109,7 +109,7 @@ function Check-BinderPackage($Manifest) {
         }
     }
     foreach ($file in @('BUILD_MANIFEST.json','collect_binder.ps1','binder_transaction.ps1','analyze_binder.py',
-                        'IXRayBinderCpu.wprp','instrumentation_map.json','capture-tools/binder_capture_runtime_test.exe',
+                        'IXRayBinderCpu.wprp','instrumentation_map.json','binder_observer.json','capture-tools/binder_capture_runtime_test.exe',
                         'capture-tools/lua51.dll','capture-tools/PresentMon-2.6.0-x64.exe','capture-tools/ixray_etw_decode.exe')) {
         if (-not $names.ContainsKey($file)) { throw "Unsealed required file: $file" }
     }
@@ -240,7 +240,7 @@ try {
     $meta.presentmon_sha256 = Hash $pm
     $meta.etw_decoder_sha256 = Hash $decoder
     $meta.analyzer_sha256 = Hash (Join-Path $PSScriptRoot 'analyze_binder.py')
-    foreach ($file in @('BUILD_MANIFEST.json', 'instrumentation_map.json')) {
+    foreach ($file in @('BUILD_MANIFEST.json', 'instrumentation_map.json', 'binder_observer.json')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $output
     }
     Copy-Item -LiteralPath (Join-Path $tools 'stack-symbols\INDEX_MANIFEST.json') -Destination (Join-Path $output 'symbol_identity.json')

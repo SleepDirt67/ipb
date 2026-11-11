@@ -3,7 +3,8 @@
 
 #include <stdint.h>
 
-enum { IX_PHASES = 12, IX_NATIVE_SITES = 96, IX_GC_STAGES = 16, IX_NATIVE_HASH = 128 };
+enum { IX_PHASES = 12, IX_NATIVE_SITES = 96, IX_GC_STAGES = 16, IX_NATIVE_HASH = 128,
+       IX_FIRST_FUNCTIONS = 16, IX_NATIVE_PERIOD = 64 };
 enum IxExecution { IX_HOST, IX_VM, IX_EXTERNAL, IX_GC, IX_EXECUTION_COUNT };
 enum IxGcStage {
   IX_GC_ROOTS, IX_GC_PROPAGATE, IX_GC_ATOMIC, IX_GC_SWEEP_STRINGS,
@@ -32,11 +33,13 @@ typedef struct IxBinderRecord {
   uint64_t allocated, released, allocation_calls, heap_before, heap_after;
   uint32_t frame, tid, vm_generation, object, generation, kind, flags;
   uint32_t phase, execution, gc_stage, gc_cycles, marks, address_count;
-  uint32_t native_cursor;
+  uint32_t native_cursor, native_seen, native_sampled, qpc_queries;
+  uint32_t reserved;
   uint64_t ticks[IX_PHASES][IX_EXECUTION_COUNT];
   IxTally gc[IX_GC_STAGES];
   IxNativeSite native[IX_NATIVE_SITES];
   uint16_t native_hash[IX_NATIVE_HASH];
+  uint64_t first_functions[IX_FIRST_FUNCTIONS];
 } IxBinderRecord;
 
 typedef struct IxDispatchRecord {

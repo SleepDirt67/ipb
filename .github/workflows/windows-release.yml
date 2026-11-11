@@ -579,6 +579,30 @@ jobs:
           [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path ci/spawn-path/capture/spawn_path_capture.ps1),[ref]$tokens,[ref]$errors) | Out-Null
           if ($errors.Count) { throw "Spawn launcher parser errors: $errors" }
 
+      - name: Verify observer effect before compiling the full engine
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $profile = (Resolve-Path ci/binder-capture/capture/IXRayBinderCpu.wprp).Path
+          $session = 'IXRayBinderObserver_' + [guid]::NewGuid().ToString('N')
+          $trace = (New-Item -ItemType Directory -Path checks/binder-observer -Force).FullName
+          $etl = Join-Path $trace 'cpu_scheduling.etl'
+          $env:IXRAY_BINDER_CAPTURE = '1'
+          wpr.exe -start "$profile!IXRayBinderCpu" -filemode -instancename $session
+          if ($LASTEXITCODE -ne 0) { throw 'Observer WPR session did not start' }
+          try {
+            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua checks/binder/voice_probe.lua --binder-observer 2>checks/BINDER_OBSERVER_STDERR.txt >checks/BINDER_OBSERVER_WINDOWS.txt
+            if ($LASTEXITCODE -ne 0) { throw 'Binder observer replay changed semantics or lost measurements' }
+            wpr.exe -stop $etl 'IX-Ray observer control' -skipPdbGen -instancename $session
+            if ($LASTEXITCODE -ne 0) { throw 'Observer trace could not be saved' }
+          } finally {
+            Remove-Item Env:IXRAY_BINDER_CAPTURE -ErrorAction SilentlyContinue
+            wpr.exe -cancel -instancename $session 2>$null | Out-Null
+          }
+          python ci/binder-capture/observer_assess.py checks/BINDER_OBSERVER_WINDOWS.txt $trace checks/spawn-path/Release/ixray_etw_decode.exe checks/BINDER_OBSERVER.json ([Diagnostics.Stopwatch]::Frequency)
+          if ($LASTEXITCODE -ne 0) { throw 'Binder instrumentation exceeded the observer bound or the A/A control was inconclusive' }
+          Remove-Item -LiteralPath $etl
+
       - name: Run actual-source audit differential tests
         shell: pwsh
         run: |
@@ -648,19 +672,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Detached voice binder replay failed' }
           } finally {
             Remove-Item Env:IXRAY_SPAWN_PREPARE -ErrorAction SilentlyContinue
-          }
-
-      - name: Measure off, boundary-only and full collection on native voice replay
-        shell: pwsh
-        timeout-minutes: 6
-        run: |
-          $env:IXRAY_BINDER_CAPTURE = '1'
-          try {
-            & ixray/build/x64/Engine-Windows/bin/Release/ixray_spawn_mainline_replay.exe checks/spawn-mainline/stock.lua checks/spawn-mainline/previous.lua checks/spawn-mainline/candidate.lua checks/binder/voice_probe.lua --binder-observer 2>checks/BINDER_OBSERVER_STDERR.txt | Tee-Object checks/BINDER_OBSERVER_WINDOWS.txt
-            if ($LASTEXITCODE -ne 0) { throw 'Binder observer replay changed semantics or lost measurements' }
-          } finally { Remove-Item Env:IXRAY_BINDER_CAPTURE -ErrorAction SilentlyContinue }
-          if (@(Select-String -LiteralPath checks/BINDER_OBSERVER_WINDOWS.txt -Pattern '^OBSERVER ').Count -ne 2) {
-            throw 'Binder observer workloads were not measured'
           }
 
       - name: Check sealed sources and package exact Release

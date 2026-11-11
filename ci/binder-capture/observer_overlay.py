@@ -21,29 +21,34 @@ def apply(engine, input_script, output):
         source = one(source, '    Require(argc == 5, "stock, previous, candidate and replay input");',
                      '    Require(argc == 5 || argc == 6, "stock, previous, candidate and replay input");')
         anchor = '    for (const auto* mode : {"normal", "npc_override", "fs_override", "getfs_override",'
-        probe = """
+        probe = r"""
     if (argc == 6)
     {
         Require(std::string_view(argv[5]) == "--binder-observer", "observer argument");
         using namespace ObserverReplay;
+        Require(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0, "observer thread priority");
         for (const auto* workload : {"binder_545", "binder_569"})
         {
-            std::vector<double> fullDelta, boundaryDelta;
-            uint64_t observedCalls = 0;
+            std::vector<double> fullDelta, boundaryDelta, offDelta;
+            uint64_t observedCalls = 0, timedCalls = 0;
             for (unsigned trial = 0; trial != 21; ++trial)
             {
-                Result states[3];
-                double times[3]{};
-                for (unsigned step = 0; step != 3; ++step)
+                Result states[4];
+                double times[4]{};
+                for (unsigned step = 0; step != 4; ++step)
                 {
-                    const unsigned variant = (step + trial) % 3;
+                    const unsigned variant = (step + trial) % 4;
                     mode = static_cast<Mode>(variant);
                     states[variant] = Replay(argv[3], argv[4], workload);
                     times[variant] = Milliseconds();
-                    if (mode != Off) Require(completed == 10, "observer NPC count");
-                    if (mode == Full) observedCalls = calls;
+                    Require(completed == 10, "observer NPC count");
+                    for (const auto& window : windows)
+                        std::printf("OBSERVER_SAMPLE %s %u %u %lu %llu %llu\n", workload, trial, variant,
+                            GetCurrentThreadId(), static_cast<unsigned long long>(window.begin),
+                            static_cast<unsigned long long>(window.end));
+                    if (mode == Full) { observedCalls = calls; timedCalls = timed; }
                 }
-                for (unsigned variant = 1; variant != 3; ++variant)
+                for (unsigned variant = 1; variant != 4; ++variant)
                     Require(states[variant].state == states[0].state &&
                         states[variant].added == states[0].added && states[variant].applied == states[0].applied,
                         "observer changed replay state or effects");
@@ -53,12 +58,12 @@ def apply(engine, input_script, output):
                 {
                     boundaryDelta.push_back(times[1] - times[0]);
                     fullDelta.push_back(times[2] - times[0]);
+                    offDelta.push_back(std::abs(times[3] - times[0]));
                 }
             }
-            const auto p95 = P95(fullDelta);
-            std::printf("OBSERVER %s p95_boundaries=%.6f p95_full=%.6f external_calls=%llu limit_ms=0.5 %s\\n",
-                workload, P95(boundaryDelta), p95, static_cast<unsigned long long>(observedCalls),
-                p95 <= .5 ? "PASS" : "UNRESOLVED");
+            std::printf("OBSERVER %s p95_boundaries=%.6f p95_full=%.6f p95_off_noise=%.6f external_calls=%llu timed_calls=%llu\n",
+                workload, P95(boundaryDelta), P95(fullDelta), P95(offDelta),
+                static_cast<unsigned long long>(observedCalls), static_cast<unsigned long long>(timedCalls));
         }
         admittedPlan.reset();
         Core._destroy();

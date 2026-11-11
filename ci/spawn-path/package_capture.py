@@ -53,12 +53,14 @@ for file in (binder / "capture").iterdir():
     if file.is_file():
         shutil.copy2(file, package)
 shutil.copy2(checks / "binder/instrumentation_map.json", package)
+shutil.copy2(checks / "BINDER_OBSERVER.json", package / "binder_observer.json")
 shutil.copy2(Path("binder-checks/Release/binder_capture_runtime_test.exe"), capture)
 shutil.copy2(package / "bin/lua51.dll", capture)
 binary_manifest["binder_capture"] = {
-    "schema": 4,
+    "schema": 5,
     "base": "886337084c8fd851a4fff186b453ae7cc6450821",
-    "acceptance": "internal QA, target workload observer effect unverified",
+    "acceptance": "matched native replay and scheduler observer bound",
+    "observer_sha256": digest(package / "binder_observer.json"),
 }
 binary_manifest_path.write_text(json.dumps(binary_manifest, indent=2) + "\n")
 files = sorted(path for path in package.rglob("*") if path.is_file() and path.name != "SHA256SUMS.txt")

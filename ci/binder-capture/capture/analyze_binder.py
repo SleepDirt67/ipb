@@ -16,13 +16,13 @@ from analyze_capture import (cpu_overlap, cpu_schedule, cpu_window_available, en
 
 HEADER = Struct("<8s5Q16I")
 EPISODE = Struct("<3Q6I")
-BINDER = Struct("<12Q14I")
+BINDER = Struct("<12Q18I")
 PHASES = Struct("<48Q")
 TALLY = Struct("<2Q2I")
 NATIVE = Struct("<4Q4I")
 METHOD = Struct("<48s64sI")
 DISPATCH = Struct("<6Q8I96s")
-BINDER_SIZE = BINDER.size + PHASES.size + 16 * TALLY.size + 96 * NATIVE.size + 256
+BINDER_SIZE = BINDER.size + PHASES.size + 16 * TALLY.size + 96 * NATIVE.size + 256 + 128
 CATEGORIES = ("host", "vm_and_internal", "external_c", "gc")
 KINDS = {1: "reinit", 2: "reload", 3: "net_spawn", 4: "load"}
 GC = (
@@ -52,7 +52,7 @@ def capture_data(path):
                           "pid binders dispatches binder_dropped dispatch_dropped wrapper_installs wrapper_refused "
                           "script_matches script_misses stop_reason strong large binder_size dispatch_size episodes methods",
                           HEADER.unpack(stream.read(HEADER.size)))
-        if (header["magic"] != b"IXBIND4\0" or header["binder_size"] != BINDER_SIZE or
+        if (header["magic"] != b"IXBIND5\0" or header["binder_size"] != BINDER_SIZE or
                 header["dispatch_size"] != DISPATCH.size or not 0 < header["frequency"] or
                 not 0 <= header["episodes"] <= 9 or header["binders"] > 4500 or header["dispatches"] > 14400 or header["methods"] > 512):
             raise ValueError("Invalid binder binary header")
@@ -70,7 +70,7 @@ def capture_data(path):
             raw = stream.read(BINDER_SIZE)
             row = labelled("begin end scope parent_scope dispatch last global allocated released allocation_calls "
                            "heap_before heap_after frame tid vm_generation object generation kind flags "
-                           "phase execution gc_stage gc_cycles marks address_count native_cursor",
+                           "phase execution gc_stage gc_cycles marks address_count native_cursor native_seen native_sampled qpc_queries reserved",
                            BINDER.unpack_from(raw))
             if row["address_count"] > 96 or row["kind"] not in KINDS or not 0 < row["begin"] <= row["end"]:
                 raise ValueError("Invalid binder record")
@@ -140,7 +140,7 @@ def hash_file(path):
 def export_scopes(directory, capture_id, header, binders, dispatches, tools):
     identity = {"capture_id": capture_id, "pid": header["pid"]}
     keep = ("begin", "end", "scope", "parent_scope", "dispatch", "frame", "tid", "vm_generation",
-            "object", "generation", "kind", "flags", "marks")
+            "object", "generation", "kind", "flags", "marks", "native_seen", "native_sampled", "qpc_queries")
     write_csv(directory / "binder_scopes.csv", [
         {**identity, **{key: row[key] for key in keep}} for row in binders
     ])
@@ -283,6 +283,9 @@ def verify_episodes(episodes, binders, dispatches, by_present, spans, joined, sc
             "remaining_if_all_dispatch_removed_ms": (end - begin - spawn_ticks) * scale,
             "capture_copy_ms": ep["copy_ticks"] * scale, "root_stalkers": roots,
             "dispatches": len(dispatch), "strong": strong, "structural": roots >= 6,
+            "native_calls": sum(row.get("native_seen", 0) for row in binder),
+            "native_calls_timed": sum(row.get("native_sampled", 0) for row in binder),
+            "binder_qpc_queries": sum(row.get("qpc_queries", 0) for row in binder),
             "binder_categories_ms": {name: value * scale for name, value in categories.items()},
             "binder_phases_ms": {phase: {name: value * scale for name, value in values.items()}
                                  for phase, values in phase_categories.items()},
@@ -415,7 +418,9 @@ def run(directory, tools):
         first = targets[0]
         lines.extend([
             f"## Frame {first['engine_frame']}", "",
-            "| Script phase | Host | VM and other | External C | GC |",
+            f"Timed {first['native_calls_timed']} of {first['native_calls']} external C calls.",
+            "The unmeasured C calls remain in VM and other. Timed C intervals are a lower bound.", "",
+            "| Script phase | Host | VM and other | Timed external C | GC |",
             "|---|---:|---:|---:|---:|",
         ])
         for number, values in sorted(first["binder_phases_ms"].items(), key=lambda x: -sum(x[1].values())):

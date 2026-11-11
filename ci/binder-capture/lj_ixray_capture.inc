@@ -40,6 +40,7 @@ uint64_t ix_capture_clock(void)
 void ix_capture_account(IxBinderRecord *record, uint64_t now)
 {
   uint64_t elapsed;
+  record->qpc_queries++;
   if (now < record->last) {
     record->flags |= IX_BAD_CLOCK;
     return;
@@ -76,7 +77,7 @@ int ix_capture_enter_vm(lua_State *L)
     ix_capture->flags |= IX_DIFFERENT_VM;
     return -1;
   }
-  return ix_capture_enter(IX_VM);
+  return ix_capture->execution == IX_VM ? -1 : ix_capture_enter(IX_VM);
 }
 
 void ix_capture_leave_vm(int previous)
@@ -150,6 +151,7 @@ static IxNativeSite *ix_capture_site(IxBinderRecord *record, uintptr_t address, 
     return NULL;
   }
   site = &record->native[record->address_count++];
+  memset(site, 0, sizeof(*site));
   record->native_hash[cell] = (uint16_t)record->address_count;
   site->address = address;
   site->phase = record->phase;
@@ -230,6 +232,22 @@ static int ix_capture_wrap(lua_State *L, lua_CFunction function)
     return function(L);
   }
   outer = record->native_cursor;
+  {
+    unsigned slot = ((uintptr_t)function >> 4) & (IX_FIRST_FUNCTIONS - 1);
+    unsigned call = ++record->native_seen;
+    if (record->first_functions[slot] &&
+        ((call + (unsigned)record->scope) & (IX_NATIVE_PERIOD - 1)) != 0) {
+      /* Keep the unmeasured C body in the explicit VM/other residual. A skipped
+         method must not replace its sampled caller's Luabind identity. */
+      if (!outer) return function(L);
+      record->native_cursor = 0;
+      result = function(L);
+      if (!(record->flags & IX_NONLOCAL_EXIT)) record->native_cursor = outer;
+      return result;
+    }
+    record->first_functions[slot] = (uintptr_t)function;
+    record->native_sampled++;
+  }
   previous = ix_capture_enter(IX_EXTERNAL);
   started = record->last;
   site = ix_capture_site(record, (uintptr_t)function, 0);
@@ -297,6 +315,7 @@ LUA_API void *xrBinderCaptureContext(lua_State *L, void *context)
       next->flags |= IX_DIFFERENT_VM;
     }
     next->last = now;
+    if (!previous) next->qpc_queries++;
   }
   if (previous) previous->end = now;
   return previous;
@@ -310,6 +329,8 @@ static int ix_capture_mark(lua_State *L)
   phase = (int)lua_tointeger(L, 1);
   if (phase > 0 && phase < IX_PHASES) {
     ix_capture_account(record, ix_capture_clock());
+    if (record->phase != (unsigned)phase)
+      memset(record->first_functions, 0, sizeof(record->first_functions));
     record->phase = (unsigned)phase;
     record->marks |= 1u << phase;
   }

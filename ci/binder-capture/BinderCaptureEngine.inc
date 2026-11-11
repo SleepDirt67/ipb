@@ -1,6 +1,7 @@
 #include "BinderCapture.h"
 #include <array>
 #include <cstring>
+#include <cstddef>
 
 namespace BinderCapture
 {
@@ -75,7 +76,7 @@ namespace BinderCapture
                     memset(frame.binders.data(), 0, sizeof(frame.binders));
                     memset(frame.dispatches.data(), 0, sizeof(frame.dispatches));
                 }
-                memcpy(header.magic, "IXBIND4", 8);
+                memcpy(header.magic, "IXBIND5", 8);
                 header.pid = GetCurrentProcessId();
                 LARGE_INTEGER f{};
                 QueryPerformanceFrequency(&f);
@@ -388,7 +389,10 @@ namespace BinderCapture
             return;
         }
         row_ = &f.binders[f.binderCount++];
-        *row_ = {};
+        // The site table is sparse. Its used slots are reset on insertion.
+        memset(row_, 0, offsetof(IxBinderRecord, native));
+        memset(row_->native_hash, 0, sizeof(row_->native_hash));
+        memset(row_->first_functions, 0, sizeof(row_->first_functions));
         row_->scope = ++s->next;
         outer_ = s->binder;
         row_->parent_scope = outer_ ? outer_->scope : s->dispatch->scope;

@@ -1,5 +1,9 @@
 #include "src/xrEngine/BinderCaptureFormat.h"
 #include <algorithm>
+#include <cstddef>
+#include <cmath>
+#include <iterator>
+#include <cstring>
 #include <windows.h>
 
 namespace ObserverReplay
@@ -7,18 +11,26 @@ namespace ObserverReplay
     using Exchange = void* (__cdecl*)(lua_State*, void*);
     using Setup = int (__cdecl*)(lua_State*);
     using Mark = void (__cdecl*)(lua_State*);
-    using Clock = std::chrono::steady_clock;
 
-    enum Mode { Off, Boundaries, Full };
+    enum Mode { Off, Boundaries, Full, OffWitness };
     Mode mode = Off;
     Exchange exchange = nullptr;
     Mark mark = nullptr;
-    uint64_t calls = 0, elapsed = 0;
+    uint64_t calls = 0, timed = 0, elapsed = 0;
     unsigned completed = 0;
+    struct Window { uint64_t begin, end; };
+    Window windows[10];
+
+    uint64_t Counter()
+    {
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        return now.QuadPart;
+    }
 
     void Configure(lua_State* vm)
     {
-        elapsed = calls = completed = 0;
+        elapsed = calls = timed = completed = 0;
         if (mode != Full)
             return;
         const auto lua = GetModuleHandleW(L"lua51.dll");
@@ -31,18 +43,21 @@ namespace ObserverReplay
 
     struct Scope
     {
-        Clock::time_point begin;
+        uint64_t begin;
         IxBinderRecord record;
         void* previous = nullptr;
         lua_State* vm = nullptr;
 
         void Enter(lua_State* L)
         {
-            begin = Clock::now();
+            begin = Counter();
             if (mode == Full)
             {
                 vm = L;
-                record = {};
+                memset(&record, 0, offsetof(IxBinderRecord, native));
+                memset(record.native_hash, 0, sizeof(record.native_hash));
+                memset(record.first_functions, 0, sizeof(record.first_functions));
+                record.scope = completed;
                 previous = exchange(vm, &record);
                 const int top = lua_gettop(L);
                 lua_getglobal(L, "__ixray_binder_capture_phase");
@@ -59,16 +74,23 @@ namespace ObserverReplay
                 exchange(vm, previous);
                 Require(record.marks == (1u << 8) && !(record.flags & ~IX_NATIVE_OVERFLOW),
                     "observer captured complete Lua interval");
-                for (unsigned i = 0; i < record.address_count; ++i)
-                    calls += record.native[i].measure.count;
+                calls += record.native_seen;
+                timed += record.native_sampled;
             }
-            if (mode != Off)
-                ++completed;
-            elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - begin).count();
+            const auto end = Counter();
+            if (completed < std::size(windows))
+                windows[completed] = {begin, end};
+            ++completed;
+            elapsed += end - begin;
         }
     };
 
-    double Milliseconds() { return elapsed / 1000000.0; }
+    double Milliseconds()
+    {
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        return 1000.0 * elapsed / frequency.QuadPart;
+    }
 
     double P95(std::vector<double> values)
     {

@@ -94,7 +94,7 @@ def apply(root, checks):
         "base": "886337084c8fd851a4fff186b453ae7cc6450821",
         "stock_motivator_sha256": SCRIPT_SHA256, "normalized_sha256": hashlib.sha256(stock).hexdigest(),
         "instrumented_sha256": hashlib.sha256(marked).hexdigest(), "phases": PHASES,
-        "native": "External C wrapper. JIT fast functions, FFI and VM internals remain unattributed.",
+        "native": "First occupied slot per phase and one call per 64 thereafter. Untimed C, JIT fast functions, FFI and VM internals remain in the residual.",
     }, indent=2) + "\n", encoding="utf-8")
     (checks / "motivator_probe.lua").write_bytes(marked)
 

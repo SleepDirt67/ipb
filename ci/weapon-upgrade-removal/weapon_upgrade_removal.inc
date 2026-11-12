@@ -108,12 +108,20 @@ bool CWeapon::RemoveInstalledUpgrade(const shared_str& upgrade_id)
     // separate spawn payload. Normalize the same selectors in both.
     auto server_upgrades = server->m_upgrades;
     const auto old_ammo = server->ammo_type;
+    const auto old_loaded_ammo = server->a_elapsed;
+    const auto old_loaded_chamber = server->a_chamber_elapsed;
+    const auto old_addons = server->m_addon_flags;
+    const auto old_condition = server->m_fCondition;
     const auto old_chamber = server->chamber_ammo_type;
     const auto old_scope = server->cur_scope;
     const auto old_zoom = server->rt_zoom_factor;
     const auto old_grenades = server->a_elapsed_grenades;
     server->m_upgrades = retained;
     server->ammo_type = 0;
+    server->a_elapsed = 0;
+    server->a_chamber_elapsed = 0;
+    server->m_addon_flags.zero();
+    server->m_fCondition = GetCondition();
     server->chamber_ammo_type = 0;
     server->cur_scope = 0;
     server->rt_zoom_factor = 0.0f;
@@ -122,6 +130,10 @@ bool CWeapon::RemoveInstalledUpgrade(const shared_str& upgrade_id)
     server->client_data.swap(previous_client_data);
     server->m_upgrades.swap(server_upgrades);
     server->ammo_type = old_ammo;
+    server->a_elapsed = old_loaded_ammo;
+    server->a_chamber_elapsed = old_loaded_chamber;
+    server->m_addon_flags = old_addons;
+    server->m_fCondition = old_condition;
     server->chamber_ammo_type = old_chamber;
     server->cur_scope = old_scope;
     server->rt_zoom_factor = old_zoom;

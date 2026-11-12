@@ -1,7 +1,7 @@
 {
   ".gitattributes": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
   ".github/workflows/lua-gc-windows.yml": "20ebb5b156c8cea5a182fdf3635425608bac19eabeab268fb20f929942c3ce7b",
-  ".github/workflows/windows-release.yml": "f2e2f3ce46ab9a3af061da6ee10564e75ccfd0e9e26aa8d25dada4f3ba663733",
+  ".github/workflows/windows-release.yml": "708d76219908f74c4e20eb178efd12a4c3c54fcda24bbb3efdc3fb8e674d1631",
   "IXRay_136_CPU_Batch_Perf.patch": "21a2fb494635736430a1d214e4e5ca5d7fcf3903c1aaa3c45a1e5e1cc38db9b9",
   "IXRay_136_CPU_Grass_Graph_Batch3.patch": "7248cc91f2a145f6c07dddb9ac2d76b9aa377fe2b7de4a8f559c0d779d2fe569",
   "IXRay_136_CPU_Streaming_Batch2.patch": "2d3d22229d31a1ebbd968d94933158fa3d49cf388718dcae704c28fa30b10696",
@@ -108,7 +108,7 @@
   "ci/ui-repair/apply.py": "b578f4c5c9e58bdd6af235ab5ce057f5c02f807168f0d70648f08d02f596d778",
   "ci/verify_package.ps1": "df73c6ada37472aa06f48fd48a24cb5290b8c54c6868cd59090e459466c6c6af",
   "ci/weapon-upgrade-removal/apply.py": "412730c95c2fe5b04d10ae752f8dd61461a8b66893d7428d2ef61276b38b63bf",
-  "ci/weapon-upgrade-removal/weapon_upgrade_removal.inc": "3f9e4d1f78eddec57faf6767bbac1787698cd9f988c879e9b6ba7631730456e4",
+  "ci/weapon-upgrade-removal/weapon_upgrade_removal.inc": "c92f76251824e9db847c1f558f1d66003f17cca55881d7107f0818dfcb1c59bf",
   "experiments/audit-136/TRACE_STAGES.json": "488bcc51afd3c8b18f0fe7b3f1e6abe4438da0c01390e4f3efd4fb9ca95ed5cd",
   "experiments/audit-136/performance.patch": "27370390a7b907e8a0b1ca3a4c7f49c8579f888632166f12ed94dd9719ac26db",
   "experiments/audit-136/tests/CMakeLists.txt": "70cbe966e5ece76a603d3c338ce29f188bb8cf08247a576e9b1869f52edefaf7",

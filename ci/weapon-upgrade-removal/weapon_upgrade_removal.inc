@@ -5,7 +5,7 @@ bool CWeapon::RemoveInstalledUpgrade(const shared_str& upgrade_id)
         return false;
 
     auto* manager = Level().m_upgrade_manager;
-    auto& alife = ai().alife();
+    auto& alife = *ai().get_alife();
     auto* server = smart_cast<CSE_ALifeItemWeapon*>(alife.objects().object(object_id(), true));
     if (!manager || !server)
         return false;

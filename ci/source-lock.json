@@ -108,7 +108,7 @@
   "ci/ui-repair/apply.py": "b578f4c5c9e58bdd6af235ab5ce057f5c02f807168f0d70648f08d02f596d778",
   "ci/verify_package.ps1": "df73c6ada37472aa06f48fd48a24cb5290b8c54c6868cd59090e459466c6c6af",
   "ci/weapon-upgrade-removal/apply.py": "412730c95c2fe5b04d10ae752f8dd61461a8b66893d7428d2ef61276b38b63bf",
-  "ci/weapon-upgrade-removal/weapon_upgrade_removal.inc": "c92f76251824e9db847c1f558f1d66003f17cca55881d7107f0818dfcb1c59bf",
+  "ci/weapon-upgrade-removal/weapon_upgrade_removal.inc": "9f92814fa461ca9652ef533e95fdd666f38b6f1bf3017e9a2bb46f8832cf551f",
   "experiments/audit-136/TRACE_STAGES.json": "488bcc51afd3c8b18f0fe7b3f1e6abe4438da0c01390e4f3efd4fb9ca95ed5cd",
   "experiments/audit-136/performance.patch": "27370390a7b907e8a0b1ca3a4c7f49c8579f888632166f12ed94dd9719ac26db",
   "experiments/audit-136/tests/CMakeLists.txt": "70cbe966e5ece76a603d3c338ce29f188bb8cf08247a576e9b1869f52edefaf7",

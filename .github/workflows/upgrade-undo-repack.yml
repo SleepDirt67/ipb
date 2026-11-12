@@ -71,7 +71,7 @@ jobs:
             $path=Join-Path work/unpacked $Matches[2]
             if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower() -ne $Matches[1]) { throw "Checksum mismatch: $path" }
           }
-          Compress-Archive -Path work/unpacked/* -DestinationPath work/UpgradeUndo_IXRay136_Integrated.zip -CompressionLevel Optimal
+          Compress-Archive -Path work/unpacked/* -DestinationPath work/UpgradeUndo_IXRay136_Integrated.zip -CompressionLevel Optimal -Force
           Add-Type -AssemblyName System.IO.Compression
           $zip=[IO.Compression.ZipFile]::OpenRead((Resolve-Path work/UpgradeUndo_IXRay136_Integrated.zip).Path)
           try {

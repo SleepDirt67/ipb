@@ -1,0 +1,86 @@
+name: Upgrade Undo - repack installer with game folder prompt
+on:
+  push:
+    branches: ['release/upgrade-undo-installer']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  repack:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - name: Get already tested integrated release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force work | Out-Null
+          gh release download upgrade-undo-r136-integrated -R $env:GITHUB_REPOSITORY -p UpgradeUndo_IXRay136_Integrated.zip -D work
+          if ($LASTEXITCODE -ne 0) { throw 'Release download failed' }
+          Expand-Archive work/UpgradeUndo_IXRay136_Integrated.zip work/unpacked -Force
+          $m=Get-Content work/unpacked/BUILD_MANIFEST.json -Raw | ConvertFrom-Json
+          if (@($m.modules).Count -ne 36) { throw 'Not full package' }
+          foreach ($file in $m.modules) {
+            $actual=(Get-FileHash -Algorithm SHA256 (Join-Path work/unpacked/bin $file.name)).Hash.ToLower()
+            if ($actual -ne $file.sha256) { throw "Changed binary: $($file.name)" }
+          }
+      - name: Write robust path-prompt batch installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $cmd=@'
+          @echo off
+          setlocal
+          echo IX-Ray 1.3.6 Upgrade Undo installation
+          echo.
+          echo Enter the path to your S.T.A.L.K.E.R.: Call of Pripyat game directory.
+          echo.
+          set "DEFAULT=C:\GOG Games\S.T.A.L.K.E.R. Call of Pripyat"
+          set /p "GAME_ROOT=Game folder [Enter for default GOG path]: "
+          if not defined GAME_ROOT set "GAME_ROOT=%DEFAULT%"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install.ps1" -GameRoot "%GAME_ROOT%"
+          if errorlevel 1 (
+            echo Installation failed; see error message above.
+            pause
+            exit /b 1
+          )
+          echo Installation complete; keep this extracted folder for RESTORE.cmd.
+          pause
+          '@
+          $cmd=$cmd.TrimStart([char]10).TrimEnd() -replace '\r?\n', [Environment]::NewLine
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path work/unpacked).Path 'INSTALL.cmd'),$cmd+[Environment]::NewLine,[Text.Encoding]::ASCII)
+          $path='work/unpacked/SHA256SUMS.txt'
+          $hash=(Get-FileHash -Algorithm SHA256 work/unpacked/INSTALL.cmd).Hash.ToLower()
+          $lines=Get-Content $path
+          if (-not ($lines -match '^[0-9a-f]{64}  INSTALL.cmd$')) { throw 'INSTALL.cmd checksum entry missing' }
+          $lines=@($lines | ForEach-Object {
+            if ($_ -match '^[0-9a-f]{64}  INSTALL.cmd$') { "$hash  INSTALL.cmd" } else { $_ }
+          })
+          [IO.File]::WriteAllText((Join-Path (Resolve-Path work/unpacked).Path 'SHA256SUMS.txt'),($lines -join [Environment]::NewLine)+[Environment]::NewLine,[Text.Encoding]::ASCII)
+          Add-Content work/unpacked/README_UPGRADE_UNDO.txt 'INSTALL.cmd now asks for game directory; Enter accepts default GOG path.'
+      - name: Revalidate every checksum and publish same binaries
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach ($line in Get-Content work/unpacked/SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  (.+)$') { throw "Malformed checksum: $line" }
+            $path=Join-Path work/unpacked $Matches[2]
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower() -ne $Matches[1]) { throw "Checksum mismatch: $path" }
+          }
+          Compress-Archive -Path work/unpacked/* -DestinationPath work/UpgradeUndo_IXRay136_Integrated.zip -CompressionLevel Optimal
+          Add-Type -AssemblyName System.IO.Compression
+          $zip=[IO.Compression.ZipFile]::OpenRead((Resolve-Path work/UpgradeUndo_IXRay136_Integrated.zip).Path)
+          try {
+            $names=@($zip.Entries | ForEach-Object FullName)
+            foreach ($name in @('INSTALL.cmd','RESTORE.cmd','bin/xrGame.dll','BUILD_MANIFEST.json','SHA256SUMS.txt')) {
+              if ($name -notin $names) { throw "Missing ZIP member $name" }
+            }
+          } finally { $zip.Dispose() }
+          gh release upload upgrade-undo-r136-integrated work/UpgradeUndo_IXRay136_Integrated.zip --clobber -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
+          gh release edit upgrade-undo-r136-integrated --prerelease --notes 'Integrated Upgrade Undo r1.3.6. Full Windows CI and installer rollback QA passed. INSTALL.cmd prompts for your game folder. In-game validation not performed; backup first.' -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { throw 'Release notes update failed' }

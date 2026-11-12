@@ -28,7 +28,7 @@ def apply(root: Path) -> None:
     path = 'src/xrGame/inventory_item_upgrade.cpp'
     replacements[path] = [
         ('#include "inventory_upgrade.h"',
-         '#include "inventory_upgrade.h"\n#include "inventory_upgrade_group.h"\n#include "CustomOutfit.h"\n#include "ActorHelmet.h"\n#include "xrServer_Objects_ALife_Items.h"'),
+         '#include "inventory_upgrade.h"\n#include "inventory_upgrade_group.h"\n#include "alife_object_registry.h"\n#include "CustomOutfit.h"\n#include "ActorHelmet.h"\n#include "xrServer_Objects_ALife_Items.h"'),
         ('bool CInventoryItem::get_upgrades_str(string2048& res) const', r'''// Upgrade Undo: drop one modification and any orphaned dependent stages.
 // Outfit/helmet stats recompute now; weapon stats recompute on save/reload.
 bool CInventoryItem::undo_upgrade(const shared_str& upgrade_id)
@@ -86,6 +86,20 @@ bool CInventoryItem::undo_upgrade(const shared_str& upgrade_id)
     } while (changed);
 
     const Upgrades_type remaining = m_upgrades;
+    // Keep factory-installed improvements if removal would orphan them.
+    if (defaults)
+    {
+        string512 one = {};
+        for (int i = 0, n = _GetItemCount(defaults); i < n; ++i)
+        {
+            _GetItem(defaults, i, one, sizeof(one));
+            if (!has_upgrade(shared_str(one)))
+            {
+                m_upgrades = original;
+                return false;
+            }
+        }
+    }
 
     // Weapon Load() overwrites a live magazine/chamber/addon state.
     // Update the serialized upgrade list; save & reload to rebuild stats.
@@ -98,7 +112,8 @@ bool CInventoryItem::undo_upgrade(const shared_str& upgrade_id)
 
     m_upgrades.clear();
     const float old_condition = GetCondition();
-    Load(m_section_id.c_str());
+    const shared_str base_section = m_section_id;
+    Load(base_section.c_str());
     if (CCustomOutfit* outfit = cast_outfit())
         outfit->ReloadBonesProtection();
     if (CHelmet* helmet = cast_helmet())
@@ -109,7 +124,7 @@ bool CInventoryItem::undo_upgrade(const shared_str& upgrade_id)
         if (!manager->upgrade_install(*this, kept, true))
         {
             m_upgrades.clear();
-            Load(m_section_id.c_str());
+            Load(base_section.c_str());
             if (CCustomOutfit* outfit = cast_outfit())
                 outfit->ReloadBonesProtection();
             if (CHelmet* helmet = cast_helmet())
@@ -170,9 +185,10 @@ void CUIInventoryUpgradeWnd::OnMesBoxYes()
         {
             if (CUIActorMenu* parent = smart_cast<CUIActorMenu*>(m_pParentWnd))
             {
+                const bool weapon_reload_required = m_inv_item->upgrade_undo_needs_reload();
                 parent->UpdateActor();
                 parent->SeparateUpgradeItem();
-                if (m_inv_item->upgrade_undo_needs_reload())
+                if (weapon_reload_required)
                     parent->CallMessageBoxOK("Weapon upgrade removed from save state. Save and reload the game before any further upgrades to this weapon.");
             }
         }

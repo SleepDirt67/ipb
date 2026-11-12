@@ -1,0 +1,58 @@
+name: IX-Ray r1.3.6 Upgrade Undo isolated compile
+
+on:
+  push:
+    branches: ['feature/upgrade-undo-r136']
+    paths:
+      - 'mods/UpgradeUndo/**'
+      - '.github/workflows/upgrade-undo-r136.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Windows x64 - standalone upgrade undo candidate
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - name: Checkout upgrade patch
+        uses: actions/checkout@v4
+      - name: Checkout IX-Ray exact version
+        uses: actions/checkout@v4
+        with:
+          repository: ixray-team/ixray-1.6-stcop
+          ref: r1.3.6
+          path: ixray
+      - name: Validate and apply upgrade undo patch
+        shell: pwsh
+        run: |
+          python mods/UpgradeUndo/apply_upgrade_undo.py ixray
+          if ($LASTEXITCODE -ne 0) { throw 'Patch failed' }
+          git -C ixray diff --stat
+      - name: Configure Windows build
+        shell: pwsh
+        working-directory: ixray
+        run: |
+          cmake --preset Engine-x64-Windows
+          if ($LASTEXITCODE -ne 0) { throw 'Configure failed' }
+      - name: Compile Windows release
+        shell: pwsh
+        working-directory: ixray
+        run: |
+          cmake --build --preset Engine-x64-Windows-Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'Compile failed' }
+      - name: Check compiled module
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'ixray/build/x64/Engine-Windows/bin/Release/xrGame.dll')) { throw 'Missing xrGame.dll' }
+      - name: Upload isolated test modules
+        uses: actions/upload-artifact@v4
+        with:
+          name: IXRay-UpgradeUndo-r136-TEST-CANDIDATE
+          path: |
+            ixray/build/x64/Engine-Windows/bin/Release/xrGame.dll
+            ixray/build/x64/Engine-Windows/bin/Release/xrAbstractions.dll
+          if-no-files-found: error
+          retention-days: 14

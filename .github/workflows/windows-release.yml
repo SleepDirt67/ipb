@@ -444,6 +444,18 @@ jobs:
         timeout-minutes: 8
         run: ./ci/lua-gc/build_engine_runtime.ps1
 
+      - name: Prepare and replay stock condition programs with the exact Windows LuaJIT
+        shell: pwsh
+        run: |
+          $lua = Get-ChildItem ixray/build/x64/Engine-Windows/packages -Recurse -Filter lua51.lib | Select-Object -First 1
+          if (-not $lua) { throw 'Lua import library missing' }
+          $dll = Join-Path $lua.Directory.Parent.FullName 'bin/lua51.dll'
+          if ((Get-FileHash -LiteralPath $dll).Hash -ne $env:LUAJIT_RUNTIME_SHA256) { throw 'Lua runtime mismatch' }
+          python ci/spawn/conditions.py ixray $dll checks/prepared-spawn
+          if ($LASTEXITCODE -ne 0) { throw 'Condition compiler failed' }
+          python ci/spawn/replay.py ixray $dll checks/prepared-spawn | Tee-Object checks/SPAWN_PLAN_LUA.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Condition and package differential failed' }
+
       - name: Restore localized names on existing mutant loot cards
         run: python ci/ui-repair/apply.py ixray
 
